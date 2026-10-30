@@ -19,7 +19,7 @@ def build_workflow():
     builder.add_node(
         "supervisor",
         create_supervisor_node(),
-        destinations=(*AGENTS, "training_workflow", "__end__"),
+        destinations=("marketing", "engenharia", "vida", "training_workflow", "__end__"),
     )
     builder.add_node("training_workflow", build_training_workflow())
 
