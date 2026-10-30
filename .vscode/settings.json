@@ -6,5 +6,9 @@
             "envManager": "ms-python.python:venv",
             "packageManager": "ms-python.python:pip"
         }
-    ]
+    ],
+    "sonarlint.connectedMode.project": {
+        "connectionId": "rusobrg",
+        "projectKey": "RuSoBrg_telegram-bot"
+    }
 }
