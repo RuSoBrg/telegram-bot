@@ -43,7 +43,7 @@ def pesquisar_web(
             query=consulta.strip(),
             search_depth="advanced",
             topic="general",
-            max_results=MAX_RESULTS,
+            max_results=int(os.getenv("MAX_RESEARCH_RESULTS", str(MAX_RESULTS))),
             include_answer=True,
             include_raw_content=False,
             include_domains=incluir_dominios or None,

@@ -1,0 +1,14 @@
+[
+  {
+    "name": "python-iniciantes",
+    "request": "Cria uma sessão de 3 horas sobre funções Python para iniciantes, com plano, apresentação, exercícios e soluções.",
+    "required": ["plano de sessão", "objetivos", "atividades", "avaliação", "exercícios", "soluções", "apresentação"],
+    "minimum_quality_score": 85
+  },
+  {
+    "name": "curso-multi-sessao",
+    "request": "Cria um curso de 6 sessões sobre fundamentos de programação para adultos em transição de carreira.",
+    "required": ["currículo", "6 sessões", "objetivos", "avaliação", "recursos"],
+    "minimum_quality_score": 85
+  }
+]

@@ -13,6 +13,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.types import interrupt
 
 from tools.code_tools import ler_ficheiro_codigo, listar_ficheiros_projeto
 from tools.file_tools import (
@@ -25,6 +26,9 @@ from tools.file_tools import (
     gerar_video,
 )
 from tools.web_tools import pesquisar_web
+from tools.validation_tools import validar_artefactos
+from tools.training_tools import validar_pacote_formacao
+from domain.limits import load_runtime_limits
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -37,6 +41,10 @@ class State(TypedDict):
     quality_feedback: str
     quality_iterations: int
     quality_target: str
+    status: str
+    approval_required: bool
+    request_id: str
+    user_id: str
 
 class RoutingDecision(BaseModel):
     destino: Literal["marketing", "engenharia", "vida", "formador", "finalizar"] = Field(
@@ -50,6 +58,7 @@ class QualityDecision(BaseModel):
     aprovado: bool = Field(
         description="True apenas quando o resultado estiver profissional, completo, correto e pronto a entregar."
     )
+    score: int = Field(default=0, ge=0, le=100)
     feedback: str = Field(
         description="Feedback acionável para o implementador corrigir o resultado. Vazio se aprovado."
     )
@@ -66,6 +75,7 @@ gemini_model_name = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 gemini_fallback_model_name = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite")
 
 ferramentas_web = [pesquisar_web]
+ferramentas_quality = [pesquisar_web, validar_artefactos]
 ferramentas_ficheiros = [
     gerar_documento_word,
     gerar_apresentacao_powerpoint,
@@ -75,8 +85,9 @@ ferramentas_ficheiros = [
     gerar_audio,
     gerar_musica,
     pesquisar_web,
+    validar_artefactos,
 ]
-ferramentas_formador = ferramentas_ficheiros
+ferramentas_formador = [*ferramentas_ficheiros, validar_pacote_formacao]
 ferramentas_engenharia = [
     ler_ficheiro_codigo,
     listar_ficheiros_projeto,
@@ -115,11 +126,12 @@ llm_quality_fallback = ChatGoogleGenerativeAI(
 ).with_structured_output(QualityDecision)
 llm_quality_research = ChatGoogleGenerativeAI(
     model=gemini_model_name, temperature=0.1, max_retries=1
-).bind_tools(ferramentas_web)
+).bind_tools(ferramentas_quality)
 llm_quality_research_fallback = ChatGoogleGenerativeAI(
     model=gemini_fallback_model_name, temperature=0.1, max_retries=2
-).bind_tools(ferramentas_web)
-MAX_QUALITY_ITERATIONS = int(os.environ.get("MAX_QUALITY_ITERATIONS", "3"))
+).bind_tools(ferramentas_quality)
+runtime_limits = load_runtime_limits()
+MAX_QUALITY_ITERATIONS = runtime_limits.max_quality_iterations
 
 
 def _is_transient_google_error(error: Exception) -> bool:
@@ -187,6 +199,8 @@ def supervisor_node(state: State):
             "quality_feedback": "",
             "quality_iterations": 0,
             "quality_target": "",
+            "status": "failed",
+            "approval_required": False,
         }
     
     if decisao.destino == "finalizar":
@@ -197,6 +211,8 @@ def supervisor_node(state: State):
             "quality_feedback": "",
             "quality_iterations": 0,
             "quality_target": "",
+            "status": "completed",
+            "approval_required": False,
         }
     else:
         return {
@@ -205,6 +221,8 @@ def supervisor_node(state: State):
             "quality_feedback": "",
             "quality_iterations": 0,
             "quality_target": decisao.destino,
+            "status": "producing",
+            "approval_required": False,
         }
 
 def marketing_node(state: State):
@@ -299,6 +317,7 @@ def quality_node(state: State):
         "\nAvalia apenas o último output produzido pelo agente e os artefactos associados."
         "\nSe houver factos atuais, normas, legislação, versões, preços ou referências, "
         "usa a ferramenta Tavily para os verificar antes de decidires."
+        "\nSe existirem ficheiros gerados, usa validar_artefactos com os caminhos disponíveis."
     )
     try:
         review_messages = [SystemMessage(content=review_prompt)] + state["messages"]
@@ -309,9 +328,13 @@ def quality_node(state: State):
         )
         if research.tool_calls:
             for tool_call in research.tool_calls:
-                if tool_call["name"] != pesquisar_web.name:
+                tool = next(
+                    (candidate for candidate in ferramentas_quality if candidate.name == tool_call["name"]),
+                    None,
+                )
+                if tool is None:
                     continue
-                resultado = pesquisar_web.invoke(tool_call["args"])
+                resultado = tool.invoke(tool_call["args"])
                 review_messages.extend(
                     [
                         research,
@@ -333,11 +356,40 @@ def quality_node(state: State):
             "quality_iterations": iteration + 1,
         }
 
-    if decisao.aprovado:
-        return {"quality_feedback": "", "quality_iterations": iteration + 1}
+    if decisao.aprovado and decisao.score >= 85:
+        if (
+            target == "formador"
+            and os.getenv("REQUIRE_HUMAN_APPROVAL", "true").lower() == "true"
+        ):
+            approval = interrupt(
+                {
+                    "tipo": "aprovacao_humana",
+                    "mensagem": "O pacote de formação passou na revisão automática. Aprovar para entregar os ficheiros.",
+                    "score": decisao.score,
+                }
+            )
+            if approval != "approved":
+                return {
+                    "quality_feedback": "O utilizador rejeitou o pacote. Pergunta o que deve ser alterado.",
+                    "quality_iterations": iteration + 1,
+                    "status": "rejected",
+                    "approval_required": False,
+                }
+        return {
+            "quality_feedback": "",
+            "quality_iterations": iteration + 1,
+            "status": "approved",
+            "approval_required": False,
+        }
     return {
-        "quality_feedback": decisao.feedback or "Corrige completude, rigor e apresentação profissional.",
+        "quality_feedback": (
+            decisao.feedback
+            or f"Resultado abaixo do nível profissional (score {decisao.score}/100). "
+            "Corrige completude, rigor e apresentação."
+        ),
         "quality_iterations": iteration + 1,
+        "status": "reviewing",
+        "approval_required": False,
     }
 
 
@@ -374,7 +426,7 @@ tool_node = ToolNode(ferramentas_engenharia)
 builder.add_node("tools_engenharia", tool_node)
 builder.add_node("tools_marketing", ToolNode(ferramentas_ficheiros))
 builder.add_node("tools_vida", ToolNode(ferramentas_ficheiros))
-builder.add_node("tools_formador", ToolNode(ferramentas_ficheiros))
+builder.add_node("tools_formador", ToolNode(ferramentas_formador))
 
 builder.add_edge(START, "supervisor")
 builder.add_conditional_edges(
