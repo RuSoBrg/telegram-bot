@@ -3,6 +3,7 @@ import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Annotated
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -38,15 +39,108 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 load_dotenv()
+DEFAULT_DATABASE_PATH = "workspace.db"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-workflow_store = WorkflowStore(os.getenv("WORKFLOW_DB_PATH", "workspace.db"))
-artifact_store = ArtifactVersionStore(os.getenv("ARTIFACT_DB_PATH", "workspace.db"))
+workflow_store = WorkflowStore(os.getenv("WORKFLOW_DB_PATH", DEFAULT_DATABASE_PATH))
+artifact_store = ArtifactVersionStore(os.getenv("ARTIFACT_DB_PATH", DEFAULT_DATABASE_PATH))
 runtime_limits = load_runtime_limits()
 quota_store = UserQuotaStore(
-    os.getenv("WORKFLOW_DB_PATH", "workspace.db"),
+    os.getenv("WORKFLOW_DB_PATH", DEFAULT_DATABASE_PATH),
     max_operations=runtime_limits.max_user_operations,
     window_seconds=runtime_limits.quota_window_seconds,
 )
+
+
+def _workflow_status(approval_required: bool, latest_state: dict) -> WorkflowStatus:
+    if approval_required:
+        return WorkflowStatus.APPROVAL_REQUIRED
+    if latest_state.get("status") == "failed":
+        return WorkflowStatus.FAILED
+    return WorkflowStatus.APPROVED
+
+
+def _collect_graph_events(events):
+    response = None
+    artifacts = []
+    approval_required = False
+    latest_state = {}
+    for event in events:
+        latest_state = event.metadata.get("state", latest_state)
+        if event.type == "status" and event.content == "approval_required":
+            approval_required = True
+        elif event.type == "message":
+            response = event.content
+        elif event.type == "artifact":
+            artifacts.append(event.metadata)
+    return response, artifacts, approval_required, latest_state
+
+
+def _update_run(request_id, approval_required, latest_state, artifacts):
+    run = workflow_store.get(request_id)
+    if not run:
+        return
+    run.status = _workflow_status(approval_required, latest_state)
+    run.artifacts = [
+        ArtifactRecord(
+            filename=item["filename"],
+            path=item["uri"],
+            mime_type=item.get("mime_type", "application/octet-stream"),
+            size_bytes=item.get("size_bytes", 0),
+        )
+        for item in artifacts
+    ]
+    for item in run.artifacts:
+        try:
+            artifact_store.register(item.filename, item.path, item.mime_type)
+        except FileNotFoundError:
+            logger.warning("Artefacto não é um caminho local: %s", item.path)
+    if latest_state.get("quality_report"):
+        run.quality_report = latest_state["quality_report"]
+    if latest_state.get("research_sources"):
+        run.sources = latest_state["research_sources"]
+    if latest_state.get("iteration") is not None:
+        run.iteration = latest_state["iteration"]
+    if latest_state.get("errors"):
+        run.errors = latest_state["errors"]
+    if latest_state.get("plan"):
+        run.metadata["plan"] = latest_state["plan"]
+    workflow_store.save(run)
+
+
+async def _send_workflow_message(context, chat_id: int, response: str | None, approval_required: bool, errors):
+    if response:
+        for index in range(0, len(response), 4000):
+            await context.bot.send_message(chat_id=chat_id, text=response[index : index + 4000])
+    elif approval_required:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "✅ O pacote passou na revisão automática.\n"
+                "Responde com /aprovar para receber os ficheiros ou /rejeitar para pedir alterações."
+            ),
+        )
+    else:
+        detail = "\n".join(str(error) for error in errors)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ O workflow terminou sem resposta." + (f"\nErro: {detail}" if detail else ""),
+        )
+
+
+async def _send_artifacts(context, chat_id: int, artifacts: list[dict]) -> None:
+    reader = getattr(object_store, "get_bytes", None)
+    if reader is None and artifacts:
+        raise RuntimeError("O ObjectStore configurado não suporta leitura de artefactos.")
+    for artifact in artifacts:
+        filename = artifact.get("filename", "")
+        key = artifact.get("key") or filename
+        file_bytes = await asyncio.to_thread(reader, key)
+        await context.bot.send_document(
+            chat_id=chat_id,
+            document=file_bytes,
+            filename=filename,
+            caption=f"📎 {filename}",
+        )
 
 
 async def _send_graph_events(
@@ -60,92 +154,26 @@ async def _send_graph_events(
     approval_required = False
     latest_state: dict = {}
     events = await asyncio.to_thread(lambda: list(iter_app_events(eventos)))
-    for event in events:
-        latest_state = event.metadata.get("state", latest_state)
-        if event.type == "status" and event.content == "approval_required":
-            approval_required = True
-        elif event.type == "message":
-            resposta_final = event.content
-        elif event.type == "artifact":
-            artefactos.append(event.metadata)
+    resposta_final, artefactos, approval_required, latest_state = _collect_graph_events(events)
 
     chat_id = update.effective_chat.id if update.effective_chat else None
     if chat_id is None:
         raise ValueError("Não foi possível determinar o chat do Telegram.")
 
-    run = workflow_store.get(request_id)
-    if run:
-        run.status = (
-            WorkflowStatus.APPROVAL_REQUIRED
-            if approval_required
-            else (
-                WorkflowStatus.FAILED
-                if latest_state.get("status") == "failed"
-                else WorkflowStatus.APPROVED
-            )
-        )
-        run.artifacts = [
-            ArtifactRecord(
-                filename=item["filename"],
-                path=item["uri"],
-                mime_type=item.get("mime_type", "application/octet-stream"),
-                size_bytes=item.get("size_bytes", 0),
-            )
-            for item in artefactos
-        ]
-        for item in run.artifacts:
-            try:
-                artifact_store.register(item.filename, item.path, item.mime_type)
-            except FileNotFoundError:
-                logger.warning("Artefacto não é um caminho local: %s", item.path)
-        if latest_state.get("quality_report"):
-            run.quality_report = latest_state["quality_report"]
-        if latest_state.get("research_sources"):
-            run.sources = latest_state["research_sources"]
-        if latest_state.get("iteration") is not None:
-            run.iteration = latest_state["iteration"]
-        if latest_state.get("errors"):
-            run.errors = latest_state["errors"]
-        if latest_state.get("plan"):
-            run.metadata["plan"] = latest_state["plan"]
-        workflow_store.save(run)
+    _update_run(request_id, approval_required, latest_state, artefactos)
 
-    if resposta_final:
-        for index in range(0, len(resposta_final), 4000):
-            await context.bot.send_message(
-                chat_id=chat_id, text=resposta_final[index : index + 4000]
-            )
-    elif approval_required:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=(
-                "✅ O pacote passou na revisão automática.\n"
-                "Responde com /aprovar para receber os ficheiros ou /rejeitar para pedir alterações."
-            ),
-        )
-    else:
-        errors = "\n".join(str(error) for error in latest_state.get("errors", []))
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="❌ O workflow terminou sem resposta." + (f"\nErro: {errors}" if errors else ""),
-        )
+    await _send_workflow_message(
+        context,
+        chat_id,
+        resposta_final,
+        approval_required,
+        latest_state.get("errors", []),
+    )
 
     if approval_required:
         return True
 
-    reader = getattr(object_store, "get_bytes", None)
-    if reader is None and artefactos:
-        raise RuntimeError("O ObjectStore configurado não suporta leitura de artefactos.")
-    for artifact in artefactos:
-        filename = artifact.get("filename", "")
-        key = artifact.get("key") or filename
-        file_bytes = await asyncio.to_thread(reader, key)
-        await context.bot.send_document(
-            chat_id=chat_id,
-            document=file_bytes,
-            filename=filename,
-            caption=f"📎 {filename}",
-        )
+    await _send_artifacts(context, chat_id, artefactos)
     return False
 
 
@@ -320,10 +348,16 @@ async def _lifespan(_: FastAPI):
 api = FastAPI(lifespan=_lifespan)
 
 
-@api.post(WEBHOOK_PATH)
+@api.post(
+    WEBHOOK_PATH,
+    responses={
+        401: {"description": "Invalid webhook secret"},
+        503: {"description": "Telegram application unavailable"},
+    },
+)
 async def telegram_webhook(
     request: Request,
-    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+    x_telegram_bot_api_secret_token: Annotated[str | None, Header()] = None,
 ):
     if WEBHOOK_SECRET and not hmac.compare_digest(
         x_telegram_bot_api_secret_token or "", WEBHOOK_SECRET
@@ -338,7 +372,7 @@ async def telegram_webhook(
 
 def main() -> None:
     logger.info("Bot do Telegram iniciado em %s", WEBHOOK_PATH)
-    uvicorn.run(api, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+    uvicorn.run(api, host="127.0.0.1", port=int(os.getenv("PORT", "8000")))
 
 
 if __name__ == "__main__":

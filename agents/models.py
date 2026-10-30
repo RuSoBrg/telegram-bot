@@ -25,6 +25,8 @@ from domain.models import RequirementsContext
 
 load_dotenv()
 
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+
 
 class RoutingDecision(BaseModel):
     destino: Literal["marketing", "engenharia", "vida", "formador", "finalizar"] = Field(
@@ -88,7 +90,7 @@ def _gemini(model: str, temperature: float, tools: list[BaseTool]):
 
 def specialist_models(agent: str):
     temperatures = {"marketing": 0.7, "vida": 0.4, "engenharia": 0.2, "formador": 0.3}
-    primary = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+    primary = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
     fallback = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite")
     tools = tools_for(agent)
     return (
@@ -102,7 +104,7 @@ def specialist_models(agent: str):
 
 
 def quality_models():
-    primary = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+    primary = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
     fallback = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite")
     quality_tools = [pesquisar_web, validar_artefactos]
     return (
@@ -129,7 +131,7 @@ def supervisor_model():
     provider = os.getenv("SUPERVISOR_PROVIDER", "gemini").strip().lower()
     if provider == "gemini":
         model = ChatGoogleGenerativeAI(
-            model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
+            model=os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
             temperature=0.1,
             max_retries=1,
         )
@@ -154,7 +156,7 @@ def supervisor_model():
 
 def requirements_model():
     return ChatGoogleGenerativeAI(
-        model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
+        model=os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
         temperature=0,
         max_retries=1,
     ).with_structured_output(RequirementsContext)

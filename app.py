@@ -73,20 +73,18 @@ if prompt := st.chat_input("O que precisas de resolver hoje? (Ex: Ideias para Ti
                 st.session_state.messages.append({"role": "assistant", "content": resposta_final})
             else:
                 st.warning("O sistema processou o pedido mas não gerou uma resposta direta.")
+            if st.session_state.get("approval_required", False):
+                run_status = WorkflowStatus.APPROVAL_REQUIRED
+            elif ultimo_estado.get("status") == "failed":
+                run_status = WorkflowStatus.FAILED
+            else:
+                run_status = WorkflowStatus.APPROVED
             run = WorkflowRun(
                 request_id=st.session_state.request_id,
                 workflow="auto",
                 user_id=st.session_state.thread_id,
                 objective=prompt,
-                status=(
-                    WorkflowStatus.APPROVAL_REQUIRED
-                    if st.session_state.get("approval_required", False)
-                    else (
-                        WorkflowStatus.FAILED
-                        if ultimo_estado.get("status") == "failed"
-                        else WorkflowStatus.APPROVED
-                    )
-                ),
+                status=run_status,
             )
             if ultimo_estado.get("quality_report"):
                 run.quality_report = ultimo_estado["quality_report"]

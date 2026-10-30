@@ -1,0 +1,10 @@
+.env
+.venv
+.venv-1
+*.db
+__pycache__
+.pytest_cache
+.git
+generated_files
+object_storage
+tests

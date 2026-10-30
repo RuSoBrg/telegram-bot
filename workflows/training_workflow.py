@@ -16,6 +16,39 @@ from domain.state import WorkflowState
 QUALITY_PLAN_STEP = 9
 
 
+def _training_plan_update(plan):
+    completed = [
+        step["order"] for step in plan if step.get("order", 0) < QUALITY_PLAN_STEP
+    ]
+    return completed, [
+        {
+            **step,
+            "status": (
+                "done"
+                if step.get("order", 0) in completed
+                else (
+                    "in_progress"
+                    if step.get("order") == QUALITY_PLAN_STEP
+                    else step.get("status", "pending")
+                )
+            ),
+        }
+        for step in plan
+    ]
+
+
+def _training_package_result(state):
+    plan = state.get("plan", [])
+    completed, updated_plan = _training_plan_update(plan)
+    return {
+        "status": "producing",
+        "quality_feedback": "",
+        "completed_plan_steps": completed,
+        "current_plan_step": QUALITY_PLAN_STEP if plan else 0,
+        "plan": updated_plan,
+    }
+
+
 def analyze_requirements(state: WorkflowState):
     messages = state.get("messages", [])
     objective = state.get("objective") or ""
@@ -56,37 +89,10 @@ def require_training_package(state: WorkflowState) -> dict[str, object]:
         if not isinstance(message, ToolMessage):
             continue
         try:
-            payload = json.loads(str(message.content))
+            if json.loads(str(message.content)).get("valid") is True:
+                return _training_package_result(state)
         except (TypeError, json.JSONDecodeError):
-            continue
-        if payload.get("valid") is True:
-            plan = state.get("plan", [])
-            completed = [
-                step["order"]
-                for step in plan
-                if step.get("order", 0) < QUALITY_PLAN_STEP
-            ]
-            return {
-                "status": "producing",
-                "quality_feedback": "",
-                "completed_plan_steps": completed,
-                "current_plan_step": QUALITY_PLAN_STEP if plan else 0,
-                "plan": [
-                    {
-                        **step,
-                        "status": (
-                            "done"
-                            if step.get("order", 0) in completed
-                            else (
-                                "in_progress"
-                                if step.get("order") == QUALITY_PLAN_STEP
-                                else step.get("status", "pending")
-                            )
-                        ),
-                    }
-                    for step in plan
-                ],
-            }
+            pass
     return {
         "status": "reviewing",
         "quality_feedback": (
