@@ -10,6 +10,7 @@ Avalia o último output relativamente ao pedido original:
 - clareza, Português de Portugal e instruções executáveis;
 - qualidade profissional da estrutura e dos ficheiros gerados;
 - ausência de conteúdo inventado, ambiguidades ou promessas não verificadas.
+- Quando existirem afirmações factuais atuais, exige pesquisa Tavily e fontes primárias.
 
 # Decisão
 Aprova apenas se o resultado estiver pronto para uso profissional sem trabalho essencial

@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
 
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_openai import AzureChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, START, END
@@ -24,6 +24,7 @@ from tools.file_tools import (
     gerar_musica,
     gerar_video,
 )
+from tools.web_tools import pesquisar_web
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ supervisor_router = llm_supervisor.with_structured_output(RoutingDecision)
 gemini_model_name = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 gemini_fallback_model_name = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite")
 
+ferramentas_web = [pesquisar_web]
 ferramentas_ficheiros = [
     gerar_documento_word,
     gerar_apresentacao_powerpoint,
@@ -72,6 +74,7 @@ ferramentas_ficheiros = [
     gerar_video,
     gerar_audio,
     gerar_musica,
+    pesquisar_web,
 ]
 ferramentas_formador = ferramentas_ficheiros
 ferramentas_engenharia = [
@@ -110,6 +113,12 @@ llm_quality = ChatGoogleGenerativeAI(
 llm_quality_fallback = ChatGoogleGenerativeAI(
     model=gemini_fallback_model_name, temperature=0.1, max_retries=2
 ).with_structured_output(QualityDecision)
+llm_quality_research = ChatGoogleGenerativeAI(
+    model=gemini_model_name, temperature=0.1, max_retries=1
+).bind_tools(ferramentas_web)
+llm_quality_research_fallback = ChatGoogleGenerativeAI(
+    model=gemini_fallback_model_name, temperature=0.1, max_retries=2
+).bind_tools(ferramentas_web)
 MAX_QUALITY_ITERATIONS = int(os.environ.get("MAX_QUALITY_ITERATIONS", "3"))
 
 
@@ -288,12 +297,34 @@ def quality_node(state: State):
     review_prompt += (
         f"\n\nAgente a rever: {target}. Iteração atual: {iteration + 1}."
         "\nAvalia apenas o último output produzido pelo agente e os artefactos associados."
+        "\nSe houver factos atuais, normas, legislação, versões, preços ou referências, "
+        "usa a ferramenta Tavily para os verificar antes de decidires."
     )
     try:
+        review_messages = [SystemMessage(content=review_prompt)] + state["messages"]
+        research = _invoke_google(
+            llm_quality_research,
+            llm_quality_research_fallback,
+            review_messages,
+        )
+        if research.tool_calls:
+            for tool_call in research.tool_calls:
+                if tool_call["name"] != pesquisar_web.name:
+                    continue
+                resultado = pesquisar_web.invoke(tool_call["args"])
+                review_messages.extend(
+                    [
+                        research,
+                        ToolMessage(
+                            content=resultado,
+                            tool_call_id=tool_call["id"],
+                        ),
+                    ]
+                )
         decisao = _invoke_google(
             llm_quality,
             llm_quality_fallback,
-            [SystemMessage(content=review_prompt)] + state["messages"],
+            review_messages,
         )
     except Exception:
         logger.exception("Falha na supervisão de qualidade")
@@ -343,6 +374,7 @@ tool_node = ToolNode(ferramentas_engenharia)
 builder.add_node("tools_engenharia", tool_node)
 builder.add_node("tools_marketing", ToolNode(ferramentas_ficheiros))
 builder.add_node("tools_vida", ToolNode(ferramentas_ficheiros))
+builder.add_node("tools_formador", ToolNode(ferramentas_ficheiros))
 
 builder.add_edge(START, "supervisor")
 builder.add_conditional_edges(
@@ -379,7 +411,6 @@ builder.add_conditional_edges(
     }
 )
 builder.add_edge("tools_engenharia", "engenharia")
-builder.add_node("tools_formador", ToolNode(ferramentas_formador))
 builder.add_conditional_edges(
     "formador",
     tools_condition,
