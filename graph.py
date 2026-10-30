@@ -15,6 +15,15 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from tools.code_tools import ler_ficheiro_codigo, listar_ficheiros_projeto
+from tools.file_tools import (
+    gerar_documento_pdf,
+    gerar_documento_word,
+    gerar_apresentacao_powerpoint,
+    gerar_audio,
+    gerar_fotografia,
+    gerar_musica,
+    gerar_video,
+)
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -24,13 +33,24 @@ class State(TypedDict):
     messages: Annotated[list, add_messages]
     next_agent: str
     instruction: str
+    quality_feedback: str
+    quality_iterations: int
+    quality_target: str
 
 class RoutingDecision(BaseModel):
-    destino: Literal["marketing", "engenharia", "vida", "finalizar"] = Field(
-        description="Escolhe 'marketing' para TikTok/Growth. Escolhe 'engenharia' para código/Flutter/C#. Escolhe 'vida' para rotinas pessoais, veículos, CCP ou carreira. Escolhe 'finalizar' para responder diretamente."
+    destino: Literal["marketing", "engenharia", "vida", "formador", "finalizar"] = Field(
+        description="Escolhe 'marketing' para TikTok/Growth, 'engenharia' para código/Flutter/C#, 'vida' para rotinas pessoais, 'formador' para formação e 'finalizar' para responder diretamente."
     )
     resposta_ou_instrucao: str = Field(
         description="Se 'finalizar', escreve a resposta ao utilizador. Caso contrário, escreve a instrução para o agente especializado."
+    )
+
+class QualityDecision(BaseModel):
+    aprovado: bool = Field(
+        description="True apenas quando o resultado estiver profissional, completo, correto e pronto a entregar."
+    )
+    feedback: str = Field(
+        description="Feedback acionável para o implementador corrigir o resultado. Vazio se aprovado."
     )
 
 # Modelos Híbridos (com max_retries=3 para tolerância a falhas na Google)
@@ -44,22 +64,53 @@ supervisor_router = llm_supervisor.with_structured_output(RoutingDecision)
 gemini_model_name = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 gemini_fallback_model_name = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite")
 
-llm_marketing = ChatGoogleGenerativeAI(model=gemini_model_name, temperature=0.7, max_retries=1)
+ferramentas_ficheiros = [
+    gerar_documento_word,
+    gerar_apresentacao_powerpoint,
+    gerar_documento_pdf,
+    gerar_fotografia,
+    gerar_video,
+    gerar_audio,
+    gerar_musica,
+]
+ferramentas_formador = ferramentas_ficheiros
+ferramentas_engenharia = [
+    ler_ficheiro_codigo,
+    listar_ficheiros_projeto,
+    *ferramentas_ficheiros,
+]
+
+llm_marketing = ChatGoogleGenerativeAI(model=gemini_model_name, temperature=0.7, max_retries=1).bind_tools(
+    ferramentas_ficheiros
+)
 llm_marketing_fallback = ChatGoogleGenerativeAI(
     model=gemini_fallback_model_name, temperature=0.7, max_retries=2
+).bind_tools(ferramentas_ficheiros)
+llm_vida = ChatGoogleGenerativeAI(model=gemini_model_name, temperature=0.4, max_retries=1).bind_tools(
+    ferramentas_ficheiros
 )
-llm_vida = ChatGoogleGenerativeAI(model=gemini_model_name, temperature=0.4, max_retries=1)
 llm_vida_fallback = ChatGoogleGenerativeAI(
     model=gemini_fallback_model_name, temperature=0.4, max_retries=2
-)
-
-ferramentas_engenharia = [ler_ficheiro_codigo, listar_ficheiros_projeto]
+).bind_tools(ferramentas_ficheiros)
 llm_engenharia = ChatGoogleGenerativeAI(
     model=gemini_model_name, temperature=0.2, max_retries=1
 ).bind_tools(ferramentas_engenharia)
 llm_engenharia_fallback = ChatGoogleGenerativeAI(
     model=gemini_fallback_model_name, temperature=0.2, max_retries=2
 ).bind_tools(ferramentas_engenharia)
+llm_formador = ChatGoogleGenerativeAI(
+    model=gemini_model_name, temperature=0.3, max_retries=1
+).bind_tools(ferramentas_formador)
+llm_formador_fallback = ChatGoogleGenerativeAI(
+    model=gemini_fallback_model_name, temperature=0.3, max_retries=2
+).bind_tools(ferramentas_formador)
+llm_quality = ChatGoogleGenerativeAI(
+    model=gemini_model_name, temperature=0.1, max_retries=1
+).with_structured_output(QualityDecision)
+llm_quality_fallback = ChatGoogleGenerativeAI(
+    model=gemini_fallback_model_name, temperature=0.1, max_retries=2
+).with_structured_output(QualityDecision)
+MAX_QUALITY_ITERATIONS = int(os.environ.get("MAX_QUALITY_ITERATIONS", "3"))
 
 
 def _is_transient_google_error(error: Exception) -> bool:
@@ -110,7 +161,10 @@ def ler_prompt(nome_ficheiro: str) -> str:
 
 def supervisor_node(state: State):
     sys_prompt = ler_prompt("supervisor.md")
-    instrucao_extra = "\n\nIMPORTANTE: És o CEO/Router. Decide entre 'marketing', 'engenharia', 'vida' ou 'finalizar'."
+    instrucao_extra = (
+        "\n\nIMPORTANTE: És o CEO/Router. Decide entre 'marketing', 'engenharia', "
+        "'vida', 'formador' ou 'finalizar'."
+    )
     
     mensagens = [SystemMessage(content=sys_prompt + instrucao_extra)] + state["messages"]
     try:
@@ -120,19 +174,28 @@ def supervisor_node(state: State):
         return {
             "messages": [AIMessage(content="⚠️ O supervisor não está disponível neste momento.")],
             "next_agent": "finalizar",
-            "instruction": ""
+            "instruction": "",
+            "quality_feedback": "",
+            "quality_iterations": 0,
+            "quality_target": "",
         }
     
     if decisao.destino == "finalizar":
         return {
             "messages": [AIMessage(content=f"🧠 [CEO / GPT-4o]:\n{decisao.resposta_ou_instrucao}")], 
             "next_agent": "finalizar",
-            "instruction": ""
+            "instruction": "",
+            "quality_feedback": "",
+            "quality_iterations": 0,
+            "quality_target": "",
         }
     else:
         return {
             "next_agent": decisao.destino,
-            "instruction": decisao.resposta_ou_instrucao
+            "instruction": decisao.resposta_ou_instrucao,
+            "quality_feedback": "",
+            "quality_iterations": 0,
+            "quality_target": decisao.destino,
         }
 
 def marketing_node(state: State):
@@ -144,6 +207,8 @@ def marketing_node(state: State):
     mensagens = [SystemMessage(content=sys_prompt)] + state["messages"]
     try:
         resposta = _invoke_google(llm_marketing, llm_marketing_fallback, mensagens)
+        if resposta.tool_calls:
+            return {"messages": [resposta]}
         conteudo = _content_to_text(resposta.content)
     except Exception:
         logger.exception("Falha no agente de marketing")
@@ -160,6 +225,8 @@ def vida_node(state: State):
     mensagens = [SystemMessage(content=sys_prompt)] + state["messages"]
     try:
         resposta = _invoke_google(llm_vida, llm_vida_fallback, mensagens)
+        if resposta.tool_calls:
+            return {"messages": [resposta]}
         conteudo = _content_to_text(resposta.content)
     except Exception:
         logger.exception("Falha no agente de vida")
@@ -187,10 +254,81 @@ def engenharia_node(state: State):
         
     return {"messages": [resposta]}
 
-def route_after_supervisor(state: State) -> Literal["marketing", "engenharia", "vida", "__end__"]:
+def formador_node(state: State):
+    sys_prompt = ler_prompt("formador.md")
+    instruction = state.get("instruction", "")
+    feedback = state.get("quality_feedback", "")
+    if instruction:
+        sys_prompt += f"\n\nInstrução do CEO: {instruction}"
+    if feedback:
+        sys_prompt += f"\n\nFeedback da supervisão de qualidade a corrigir:\n{feedback}"
+
+    mensagens = [SystemMessage(content=sys_prompt)] + state["messages"]
+    try:
+        resposta = _invoke_google(llm_formador, llm_formador_fallback, mensagens)
+    except Exception:
+        logger.exception("Falha no agente formador")
+        return {"messages": [AIMessage(content="⚠️ O agente formador não está disponível neste momento.")]}
+
+    if not resposta.tool_calls:
+        resposta = AIMessage(
+            content=f"🎓 [FORMADOR / Gemini]:\n{_content_to_text(resposta.content)}"
+        )
+    return {"messages": [resposta]}
+
+
+def quality_node(state: State):
+    target = state.get("quality_target", "agente")
+    iteration = state.get("quality_iterations", 0)
+    if iteration >= MAX_QUALITY_ITERATIONS:
+        logger.warning("Limite de iterações de qualidade atingido para %s", target)
+        return {"quality_feedback": "", "quality_iterations": iteration}
+
+    review_prompt = ler_prompt("qualidade.md")
+    review_prompt += (
+        f"\n\nAgente a rever: {target}. Iteração atual: {iteration + 1}."
+        "\nAvalia apenas o último output produzido pelo agente e os artefactos associados."
+    )
+    try:
+        decisao = _invoke_google(
+            llm_quality,
+            llm_quality_fallback,
+            [SystemMessage(content=review_prompt)] + state["messages"],
+        )
+    except Exception:
+        logger.exception("Falha na supervisão de qualidade")
+        return {
+            "quality_feedback": "A revisão automática falhou. Faz uma revisão final completa e entrega apenas material verificável.",
+            "quality_iterations": iteration + 1,
+        }
+
+    if decisao.aprovado:
+        return {"quality_feedback": "", "quality_iterations": iteration + 1}
+    return {
+        "quality_feedback": decisao.feedback or "Corrige completude, rigor e apresentação profissional.",
+        "quality_iterations": iteration + 1,
+    }
+
+
+def route_after_supervisor(
+    state: State,
+) -> Literal["marketing", "engenharia", "vida", "formador", "__end__"]:
     destino = state.get("next_agent")
-    if destino in ["marketing", "engenharia", "vida"]:
+    if destino in ["marketing", "engenharia", "vida", "formador"]:
         return destino
+    return "__end__"
+
+
+def route_after_quality(
+    state: State,
+) -> Literal["marketing", "engenharia", "vida", "formador", "__end__"]:
+    target = state.get("quality_target", "")
+    if (
+        state.get("quality_feedback")
+        and state.get("quality_iterations", 0) < MAX_QUALITY_ITERATIONS
+        and target in {"marketing", "engenharia", "vida", "formador"}
+    ):
+        return target
     return "__end__"
 
 builder = StateGraph(State)
@@ -198,9 +336,13 @@ builder.add_node("supervisor", supervisor_node)
 builder.add_node("marketing", marketing_node)
 builder.add_node("engenharia", engenharia_node)
 builder.add_node("vida", vida_node)
+builder.add_node("formador", formador_node)
+builder.add_node("qualidade", quality_node)
 
 tool_node = ToolNode(ferramentas_engenharia)
 builder.add_node("tools_engenharia", tool_node)
+builder.add_node("tools_marketing", ToolNode(ferramentas_ficheiros))
+builder.add_node("tools_vida", ToolNode(ferramentas_ficheiros))
 
 builder.add_edge(START, "supervisor")
 builder.add_conditional_edges(
@@ -210,22 +352,51 @@ builder.add_conditional_edges(
         "marketing": "marketing",
         "engenharia": "engenharia",
         "vida": "vida",
+        "formador": "formador",
         "__end__": END
     }
 )
 
-builder.add_edge("marketing", END)
-builder.add_edge("vida", END)
+builder.add_conditional_edges(
+    "marketing",
+    tools_condition,
+    {"tools": "tools_marketing", "__end__": "qualidade"},
+)
+builder.add_edge("tools_marketing", "marketing")
+builder.add_conditional_edges(
+    "vida",
+    tools_condition,
+    {"tools": "tools_vida", "__end__": "qualidade"},
+)
+builder.add_edge("tools_vida", "vida")
 
 builder.add_conditional_edges(
     "engenharia",
     tools_condition,
     {
         "tools": "tools_engenharia",
-        "__end__": END
+        "__end__": "qualidade"
     }
 )
 builder.add_edge("tools_engenharia", "engenharia")
+builder.add_node("tools_formador", ToolNode(ferramentas_formador))
+builder.add_conditional_edges(
+    "formador",
+    tools_condition,
+    {"tools": "tools_formador", "__end__": "qualidade"},
+)
+builder.add_edge("tools_formador", "formador")
+builder.add_conditional_edges(
+    "qualidade",
+    route_after_quality,
+    {
+        "marketing": "marketing",
+        "engenharia": "engenharia",
+        "vida": "vida",
+        "formador": "formador",
+        "__end__": END,
+    },
+)
 
 memoria = MemorySaver()
 grafo = builder.compile(checkpointer=memoria)

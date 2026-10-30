@@ -1,8 +1,10 @@
 import os
 import logging
+import json
+from pathlib import Path
 from dotenv import load_dotenv
 
-from telegram import Update
+from telegram import InputFile, Update
 from telegram.constants import ChatAction
 from telegram.ext import (
     ApplicationBuilder,
@@ -12,7 +14,7 @@ from telegram.ext import (
     filters,
 )
 
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from graph import grafo
 
 # Configuração de logging
@@ -25,6 +27,23 @@ logger = logging.getLogger(__name__)
 # Carregar variáveis de ambiente (.env)
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+
+def _artifact_from_tool_message(message: ToolMessage) -> dict | None:
+    try:
+        artifact = json.loads(str(message.content))
+    except (TypeError, json.JSONDecodeError):
+        return None
+    path = Path(artifact.get("path", "")).resolve()
+    generated_dir = (Path(__file__).resolve().parent / "generated_files").resolve()
+    if (
+        artifact.get("tipo") != "ficheiro_gerado"
+        or generated_dir not in path.parents
+        or not path.is_file()
+    ):
+        return None
+    artifact["path"] = str(path)
+    return artifact
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -59,11 +78,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         # Extrair o conteúdo da última AIMessage
         resposta_final = None
+        artefactos: list[dict] = []
         for event in eventos:
             if "messages" in event and event["messages"]:
                 ultima_msg = event["messages"][-1]
                 if isinstance(ultima_msg, AIMessage) and ultima_msg.content:
                     resposta_final = ultima_msg.content
+                elif isinstance(ultima_msg, ToolMessage):
+                    artefacto = _artifact_from_tool_message(ultima_msg)
+                    if artefacto:
+                        artefactos.append(artefacto)
 
         if resposta_final:
             # Dividir em partes se exceder o limite do Telegram (4096 caracteres)
@@ -76,6 +100,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text(
                 "⚠️ O sistema processou o pedido, mas não gerou uma resposta direta."
             )
+
+        for artefacto in artefactos:
+            caminho = Path(artefacto["path"])
+            with caminho.open("rb") as ficheiro:
+                ficheiro_telegram = InputFile(ficheiro, filename=artefacto["filename"])
+                caption = f"📎 {artefacto['filename']}"
+                mime_type = artefacto.get("mime_type", "")
+                if mime_type.startswith("image/"):
+                    await update.message.reply_photo(photo=ficheiro_telegram, caption=caption)
+                elif mime_type.startswith("video/"):
+                    await update.message.reply_video(video=ficheiro_telegram, caption=caption)
+                elif mime_type.startswith("audio/"):
+                    await update.message.reply_audio(audio=ficheiro_telegram, caption=caption)
+                else:
+                    await update.message.reply_document(
+                        document=ficheiro_telegram,
+                        caption=caption,
+                    )
 
     except Exception:
         logger.exception("Erro ao processar mensagem do chat %s", update.effective_chat.id)
@@ -102,4 +144,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
