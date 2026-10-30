@@ -5,14 +5,14 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
 COPY pyproject.toml ./
-RUN uv venv /app/.venv && uv sync --no-dev --no-install-project
+RUN uv venv /app/.venv && uv sync --locked --no-dev --no-install-project --no-build
 COPY app.py bot.py graph.py ./
 COPY agents ./agents
 COPY domain ./domain
 COPY prompts ./prompts
 COPY tools ./tools
 COPY workflows ./workflows
-RUN uv sync --no-dev
+RUN uv sync --locked --no-dev --no-build
 
 FROM python:3.11-slim-bookworm AS runtime
 
