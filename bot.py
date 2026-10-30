@@ -330,12 +330,19 @@ async def _lifespan(_: FastAPI):
         raise RuntimeError("TELEGRAM_TOKEN não configurado.")
     await telegram_application.initialize()
     await telegram_application.start()
-    webhook_url = os.getenv("TELEGRAM_WEBHOOK_URL", "").rstrip("/")
-    if webhook_url:
+    raw_webhook_url = os.getenv("TELEGRAM_WEBHOOK_URL", "").strip().rstrip("/")
+    if raw_webhook_url:
+        if raw_webhook_url.endswith(WEBHOOK_PATH):
+            webhook_url = raw_webhook_url
+        else:
+            webhook_url = f"{raw_webhook_url}{WEBHOOK_PATH}"
+        logger.info("A configurar Webhook do Telegram em: %s", webhook_url)
         await telegram_application.bot.set_webhook(
-            f"{webhook_url}{WEBHOOK_PATH}",
+            url=webhook_url,
             secret_token=WEBHOOK_SECRET or None,
+            drop_pending_updates=True,
         )
+        logger.info("Webhook configurado com sucesso!")
     try:
         yield
     finally:
@@ -344,6 +351,28 @@ async def _lifespan(_: FastAPI):
 
 
 api = FastAPI(lifespan=_lifespan)
+
+
+@api.get("/")
+@api.get("/health")
+async def health_check():
+    return {"status": "ok", "service": "telegram-bot"}
+
+
+@api.get("/webhook-info")
+async def get_webhook_info():
+    if telegram_application is None:
+        return {"error": "Telegram application not configured"}
+    info = await telegram_application.bot.get_webhook_info()
+    return {
+        "url": info.url,
+        "has_custom_certificate": info.has_custom_certificate,
+        "pending_update_count": info.pending_update_count,
+        "last_error_date": str(info.last_error_date) if info.last_error_date else None,
+        "last_error_message": info.last_error_message,
+        "max_connections": info.max_connections,
+        "ip_address": info.ip_address,
+    }
 
 
 @api.post(
@@ -369,8 +398,10 @@ async def telegram_webhook(
 
 
 def main() -> None:
-    logger.info("Bot do Telegram iniciado em %s", WEBHOOK_PATH)
-    uvicorn.run(api, host="127.0.0.1", port=int(os.getenv("PORT", "8000")))
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    logger.info("Bot do Telegram iniciado em http://%s:%d%s", host, port, WEBHOOK_PATH)
+    uvicorn.run(api, host=host, port=port)
 
 
 if __name__ == "__main__":

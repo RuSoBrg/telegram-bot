@@ -17,9 +17,11 @@ services:
       - .env
     environment:
       PORT: "8000"
+      HOST: "0.0.0.0"
       WORKFLOW_DB_PATH: ${WORKFLOW_DB_PATH:?configure WORKFLOW_DB_PATH}
-      TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:?configure TELEGRAM_WEBHOOK_URL}
-      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:?configure TELEGRAM_WEBHOOK_SECRET}
+      TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
       OBJECT_STORAGE_PATH: /app/data
     volumes:
       - ./data:/app/data
@@ -29,9 +31,14 @@ services:
       - db
     restart: unless-stopped
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN:?configure TUNNEL_TOKEN}
+  ngrok:
+    image: ngrok/ngrok:latest
+    restart: unless-stopped
+    command:
+      - "http"
+      - "bot:8000"
+      - "--domain=chalice-rewrap-sequester.ngrok-free.dev"
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
     depends_on:
       - bot
-    restart: unless-stopped
