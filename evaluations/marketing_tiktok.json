@@ -1,0 +1,7 @@
+[
+  {
+    "name": "marketing-tiktok",
+    "required": ["hook", "CTA", "PlayStore", "[VISUAL]", "[ÁUDIO]"],
+    "minimum_quality_score": 85
+  }
+]

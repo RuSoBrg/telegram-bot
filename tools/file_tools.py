@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+import zipfile
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -17,12 +18,11 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
+from domain.limits import load_runtime_limits
 
 logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
 GENERATED_DIR = BASE_DIR / "generated_files"
-MAX_CONTENT_LENGTH = 100_000
-
 
 def _output_path(filename: str, extension: str, prefix: str) -> Path:
     requested_name = Path(filename).stem if filename.strip() else prefix
@@ -36,12 +36,18 @@ def _output_path(filename: str, extension: str, prefix: str) -> Path:
 def _validate_content(content: str) -> str:
     if not content or not content.strip():
         raise ValueError("O conteúdo do ficheiro não pode estar vazio.")
-    if len(content) > MAX_CONTENT_LENGTH:
-        raise ValueError("O conteúdo excede o limite de 100000 caracteres.")
+    max_length = load_runtime_limits().max_generated_content_chars
+    if len(content) > max_length:
+        raise ValueError(f"O conteúdo excede o limite de {max_length} caracteres.")
     return content.strip()
 
 
 def _artifact(path: Path, mime_type: str) -> str:
+    max_size = int(os.getenv("MAX_ARTIFACT_BYTES", str(50 * 1024 * 1024)))
+    size = path.stat().st_size
+    if size > max_size:
+        path.unlink()
+        raise ValueError(f"O artefacto excede o limite de {max_size} bytes.")
     return json.dumps(
         {
             "tipo": "ficheiro_gerado",
@@ -86,6 +92,33 @@ def _inline_bytes(response: Any) -> bytes:
 
 def _lines(content: str) -> list[str]:
     return [line.strip() for line in content.splitlines() if line.strip()]
+
+
+@tool
+def empacotar_artefactos(
+    caminhos: list[str],
+    nome_ficheiro: str = "pacote-formacao",
+) -> str:
+    """Cria um ZIP com ficheiros gerados e devolve-o para envio no Telegram.
+    Só aceita ficheiros dentro da pasta generated_files e ignora caminhos inexistentes
+    com um erro explícito."""
+    try:
+        if not caminhos:
+            raise ValueError("É necessário indicar pelo menos um ficheiro.")
+        generated_dir = GENERATED_DIR.resolve()
+        resolved_paths: list[Path] = []
+        for raw_path in caminhos:
+            path = Path(raw_path).resolve()
+            if generated_dir not in path.parents or not path.is_file():
+                raise ValueError(f"Ficheiro inválido ou fora da pasta de artefactos: {raw_path}")
+            resolved_paths.append(path)
+        archive = _output_path(nome_ficheiro, ".zip", "pacote")
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            for path in resolved_paths:
+                bundle.write(path, arcname=path.name)
+        return _artifact(archive, "application/zip")
+    except (OSError, ValueError) as error:
+        return _tool_error(error)
 
 
 @tool
@@ -222,18 +255,19 @@ def gerar_video(
     Usa esta ferramenta para vídeos, reels, anúncios e clips. A geração pode demorar alguns minutos."""
     try:
         prompt = _validate_content(prompt)
-        if not 1 <= duracao_segundos <= 8:
-            raise ValueError("A duração do vídeo deve estar entre 1 e 8 segundos.")
+        max_seconds = min(8, load_runtime_limits().max_media_seconds)
+        if not 1 <= duracao_segundos <= max_seconds:
+            raise ValueError(f"A duração do vídeo deve estar entre 1 e {max_seconds} segundos.")
         client = _google_genai_client()
         operation = client.models.generate_videos(
             model=modelo or os.getenv("GEMINI_VIDEO_MODEL", "veo-3.1-generate-preview"),
             prompt=prompt,
             config={"duration_seconds": duracao_segundos, "number_of_videos": 1},
         )
-        deadline = time.monotonic() + 600
+        deadline = time.monotonic() + load_runtime_limits().tool_timeout_seconds
         while not operation.done:
             if time.monotonic() >= deadline:
-                raise RuntimeError("A geração do vídeo excedeu o tempo limite de 10 minutos.")
+                raise RuntimeError("A geração do vídeo excedeu o tempo limite configurado.")
             time.sleep(10)
             operation = client.operations.get(operation)
         if getattr(operation, "error", None):
@@ -294,8 +328,9 @@ def gerar_musica(
     Requer GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION e credenciais ADC com acesso ao Lyria."""
     try:
         prompt = _validate_content(prompt)
-        if not 1 <= duracao_segundos <= 60:
-            raise ValueError("A duração da música deve estar entre 1 e 60 segundos.")
+        max_seconds = min(60, load_runtime_limits().max_media_seconds)
+        if not 1 <= duracao_segundos <= max_seconds:
+            raise ValueError(f"A duração da música deve estar entre 1 e {max_seconds} segundos.")
         config = _require_env("GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION")
         import google.auth
         from google.auth.transport.requests import AuthorizedSession
@@ -314,7 +349,7 @@ def gerar_musica(
                 "instances": [{"prompt": prompt}],
                 "parameters": {"duration_seconds": duracao_segundos},
             },
-            timeout=120,
+            timeout=load_runtime_limits().tool_timeout_seconds,
         )
         response.raise_for_status()
         predictions = response.json().get("predictions", [])

@@ -9,6 +9,8 @@ class RuntimeLimits:
     max_generated_content_chars: int = 100_000
     max_media_seconds: int = 60
     tool_timeout_seconds: int = 600
+    max_user_operations: int = 100
+    quota_window_seconds: int = 86400
 
 
 def load_runtime_limits() -> RuntimeLimits:
@@ -18,4 +20,6 @@ def load_runtime_limits() -> RuntimeLimits:
         max_generated_content_chars=int(os.getenv("MAX_GENERATED_CONTENT_CHARS", "100000")),
         max_media_seconds=int(os.getenv("MAX_MEDIA_SECONDS", "60")),
         tool_timeout_seconds=int(os.getenv("TOOL_TIMEOUT_SECONDS", "600")),
+        max_user_operations=int(os.getenv("MAX_USER_OPERATIONS", "100")),
+        quota_window_seconds=int(os.getenv("QUOTA_WINDOW_SECONDS", "86400")),
     )

@@ -1,0 +1,7 @@
+[
+  {
+    "name": "pesquisa-factual",
+    "required": ["fontes", "url", "factos verificados"],
+    "minimum_quality_score": 85
+  }
+]

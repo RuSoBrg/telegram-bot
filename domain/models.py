@@ -23,6 +23,7 @@ class ResearchSource(BaseModel):
     retrieved_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     reliability: str = "unknown"
     claim_supported: str = ""
+    domain: str = ""
 
 
 class ArtifactRecord(BaseModel):
@@ -31,6 +32,9 @@ class ArtifactRecord(BaseModel):
     mime_type: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     approved: bool = False
+    sha256: str = ""
+    size_bytes: int = 0
+    version: int = 1
 
 
 class ReviewResult(BaseModel):
@@ -57,6 +61,7 @@ class TrainingPackage(BaseModel):
     prerequisites: list[str] = Field(default_factory=list)
     learning_objectives: list[str] = Field(min_length=1)
     session_plan: list[TrainingActivity] = Field(min_length=1)
+    activities: list[dict[str, Any]] = Field(default_factory=list)
     assessment: list[str] = Field(min_length=1)
     resources: list[str] = Field(default_factory=list)
     sources: list[ResearchSource] = Field(default_factory=list)

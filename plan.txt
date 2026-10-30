@@ -1,0 +1,336 @@
+# Arquitetura recomendada
+
+## 1. Separar o sistema em camadas
+Estrutura sugerida:
+
+ai_workspace/
+├── app/
+│   ├── telegram_bot.py
+│   ├── streamlit_app.py
+│   └── api.py
+├── agents/
+│   ├── supervisor.py
+│   ├── formador.py
+│   ├── researcher.py
+│   ├── quality_reviewer.py
+│   └── publisher.py
+├── workflows/
+│   ├── training_workflow.py
+│   ├── content_workflow.py
+│   └── engineering_workflow.py
+├── tools/
+│   ├── web_tools.py
+│   ├── file_tools.py
+│   ├── media_tools.py
+│   └── code_tools.py
+├── domain/
+│   ├── models.py
+│   ├── artifacts.py
+│   └── quality.py
+├── prompts/
+├── evaluations/
+├── tests/
+└── graph.py
+
+O `graph.py` deveria ficar apenas como ponto de composição do grafo.
+
+## 2. Criar um estado de execução profissional
+Em vez de guardar apenas mensagens:
+
+class WorkflowState(TypedDict):
+    request_id: str
+    user_id: str
+    objective: str
+    audience: str
+    constraints: list[str]
+    messages: Annotated[list, add_messages]
+    research_sources: list[dict]
+    artifacts: list[dict]
+    quality_report: dict | None
+    iteration: int
+    approval_required: bool
+    status: str
+    errors: list[str]
+
+    Isto permite:
+    
+    - Auditoria.
+    - Retomar workflows interrompidos.
+    - Guardar fontes.
+    - Saber que ficheiros foram gerados.
+    - Medir o número de iterações.
+    - Diferenciar `draft`, `review`, `approved` e `published`.
+
+    ## 3. Criar workflows específicos
+    
+    ### Workflow de formação
+    Pedido
+  ↓
+Análise de requisitos
+  ↓
+Pesquisa Tavily
+  ↓
+Desenho pedagógico
+  ↓
+Plano de sessão
+  ↓
+Apresentação
+  ↓
+Exercícios e soluções
+  ↓
+Avaliação
+  ↓
+Revisão pedagógica
+  ↓
+Revisão factual
+  ↓
+Geração Word/PDF/PPT
+  ↓
+Aprovação
+  ↓
+Entrega Telegram
+
+O agente formador em `formador.md` deve deixar de ser apenas um agente genérico e passar a trabalhar com um contrato de saída bem definido:
+
+class TrainingPackage(BaseModel):
+    title: str
+    audience: str
+    duration_minutes: int
+    learning_objectives: list[str]
+    session_plan: list[dict]
+    activities: list[dict]
+    assessment: list[dict]
+    resources: list[str]
+    sources: list[dict]
+    artifacts_to_generate: list[str]
+
+    Assim o sistema valida se o plano está completo antes de gerar documentos.
+    
+    ## 4. Separar tipos de supervisão
+    Não usaria apenas um supervisor de qualidade.
+    
+    ### Supervisor pedagógico
+    Avalia:
+    - Objetivos SMART.
+    - Alinhamento entre objetivos, atividades e avaliação.
+    - Gestão de tempo.
+    - Adequação ao nível dos formandos.
+    - Inclusão de exercícios práticos.
+    
+    ### Supervisor técnico
+    Avalia:
+    - Correção do código.
+    - Compatibilidade de versões.
+    - Segurança.
+    - Boas práticas.
+    - Documentação oficial.
+    
+    ### Supervisor factual
+    Usa Tavily para validar:
+    - Legislação.
+    - Normas.
+    - Versões.
+    - APIs.
+    - Preços.
+    - Dados atuais.
+    - Referências bibliográficas.
+    
+    ### Supervisor editorial
+    Avalia:
+    - Português de Portugal.
+    - Clareza.
+    - Estrutura.
+    - Formatação.
+    - Qualidade dos ficheiros finais.
+    Cada supervisor deveria emitir um resultado estruturado:
+
+    class ReviewResult(BaseModel):
+    approved: bool
+    score: int = Field(ge=0, le=100)
+    blocking_issues: list[str]
+    warnings: list[str]
+    required_changes: list[str]
+    verified_sources: list[dict]
+
+    O output só deve ser aprovado se:
+    score >= 85
+e blocking_issues estiver vazio
+e os ficheiros existirem
+e as fontes obrigatórias estiverem verificadas
+
+5. Melhorar o uso do Tavily
+O Tavily deve ser usado por intenção, não automaticamente em todas as mensagens.
+
+Criaria perfis de pesquisa:
+
+class ResearchProfile(str, Enum):
+    OFFICIAL_DOCS = "official_docs"
+    LEGISLATION = "legislation"
+    PEDAGOGY = "pedagogy"
+    MARKET = "market"
+    TECHNICAL = "technical"
+
+Exemplos:
+•	Engenharia: apenas documentação oficial e GitHub.
+•	Formação: entidades oficiais, universidades e documentação técnica.
+•	Vida: sites governamentais e entidades oficiais.
+•	Marketing: pesquisas de mercado, concorrentes e tendências.
+•	Qualidade: validação das afirmações mais importantes.
+Cada fonte deveria guardar:
+{
+    "title": "...",
+    "url": "...",
+    "domain": "...",
+    "retrieved_at": "...",
+    "claim_supported": "...",
+    "reliability": "primary"
+}
+
+6. Dar ferramentas mínimas a cada agente
+Em vez de todos os agentes receberem todas as ferramentas:
+Agente	Ferramentas
+Formador	Tavily, Word, PDF, PowerPoint, áudio
+Marketing	Tavily, imagem, vídeo, áudio, PowerPoint
+Engenharia	Tavily, leitura de código, pesquisa de ficheiros
+Vida	Tavily, Word, PDF
+Supervisor	Tavily, leitura de artefactos, validação
+Publisher	Envio Telegram, validação de ficheiros
+
+
+Isto reduz:
+•	Alucinações.
+•	Chamadas de ferramentas erradas.
+•	Custos.
+•	Risco de segurança.
+
+
+7. Implementar aprovação humana
+Para operações com impacto ou custo:
+•	Gerar vídeo.
+•	Gerar música.
+•	Pesquisas extensas.
+•	Criar grandes pacotes de formação.
+•	Usar informação legal.
+•	Enviar conteúdo externo.
+O agente deve devolver:
+Aprovação necessária:
+- 3 ficheiros serão gerados
+- custo estimado: desconhecido
+- fontes externas: 8
+- ação: gerar e enviar para Telegram
+
+No Telegram:
+Aprovar / Rejeitar / Alterar pedido
+
+8. Persistência real
+Substituir MemorySaver por persistência durável:
+•	SQLite para desenvolvimento.
+•	PostgreSQL para produção.
+•	Redis para locks e tarefas temporárias.
+•	Object storage para artefactos.
+Guardar:
+•	Conversas.
+•	Estados dos workflows.
+•	Resultados das pesquisas.
+•	Revisões.
+•	Ficheiros gerados.
+•	Versões anteriores.
+Isto também permite retomar:
+"Continua o curso de Python que começámos ontem."
+
+9. Sistema de avaliação automática
+Criaria uma pasta evaluations/ com casos reais:
+evaluations/
+├── training_basic.json
+├── training_technical.json
+├── flutter_debugging.json
+├── marketing_tiktok.json
+└── factual_research.json
+
+Métricas:
+•	Correção factual.
+•	Cobertura dos requisitos.
+•	Qualidade pedagógica.
+•	Qualidade das fontes.
+•	Qualidade dos ficheiros.
+•	Número médio de iterações.
+•	Custo por pedido.
+•	Tempo de execução.
+O objetivo não deve ser apenas “o agente respondeu”, mas:
+O resultado estava pronto para ser usado por um formador sénior?
+
+10. Observabilidade
+Adicionar:
+•	request_id.
+•	workflow_id.
+•	Nome do agente.
+•	Modelo usado.
+•	Tokens consumidos.
+•	Ferramentas chamadas.
+•	Duração.
+•	Erros.
+•	Número de revisões.
+•	Artefactos produzidos.
+
+Exemplo:
+logger.info(
+    "workflow_completed",
+    extra={
+        "request_id": request_id,
+        "workflow": "training",
+        "iterations": iterations,
+        "artifacts": len(artifacts),
+    },
+)
+
+11. Segurança prioritária
+Antes de usar isto em produção:
+•	Nunca guardar credenciais no repositório.
+•	Revogar as chaves que já foram expostas.
+•	Validar todos os caminhos de ficheiros.
+•	Limitar tamanho dos uploads e downloads.
+•	Não permitir execução arbitrária de código.
+•	Sanitizar nomes de ficheiros.
+•	Limitar chamadas Tavily e geração multimédia.
+•	Adicionar timeouts.
+•	Adicionar quotas por utilizador.
+•	Separar permissões de leitura e escrita.
+
+
+Ordem de implementação
+Fase 1 — Fundação
+1.	Extrair modelos para domain/models.py.
+2.	Criar estado de workflow tipado.
+3.	Separar agentes do graph.py.
+4.	Criar registo de artefactos e fontes.
+5.	Adicionar limites de custo e timeout.
+
+Fase 2 — Formador profissional
+1.	TrainingPackage estruturado.
+2.	Workflow específico de formação.
+3.	Supervisores pedagógico, factual e editorial.
+4.	Geração automática de Word, PDF e PowerPoint.
+5.	Pacote ZIP com todos os materiais.
+
+Fase 3 — Qualidade e produção
+Persistência PostgreSQL.
+Aprovação humana no Telegram.
+Testes de avaliação.
+Observabilidade.
+Cache de pesquisas Tavily.
+Versionamento dos materiais
+
+Fase 4 — Super agente
+Adicionar um planner capaz de decompor pedidos complexos:
+"Cria um curso de Python para iniciantes com 6 sessões"
+em:
+1. Definir público e pré-requisitos
+2. Criar currículo
+3. Criar plano de cada sessão
+4. Criar apresentações
+5. Criar exercícios
+6. Criar soluções
+7. Criar avaliações
+8. Pesquisar referências
+9. Rever qualidade
+10. Empacotar e enviar

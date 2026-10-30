@@ -1,5 +1,7 @@
 import json
 import logging
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -26,3 +28,27 @@ def log_event(event: str, *, request_id: str = "", **fields: Any) -> None:
             default=str,
         )
     )
+
+
+@contextmanager
+def timed_event(event: str, *, request_id: str = "", **fields: Any):
+    started = time.monotonic()
+    log_event(f"{event}_started", request_id=request_id, **fields)
+    try:
+        yield
+    except Exception as error:
+        log_event(
+            f"{event}_failed",
+            request_id=request_id,
+            duration_ms=round((time.monotonic() - started) * 1000),
+            error_type=type(error).__name__,
+            **fields,
+        )
+        raise
+    else:
+        log_event(
+            f"{event}_completed",
+            request_id=request_id,
+            duration_ms=round((time.monotonic() - started) * 1000),
+            **fields,
+        )

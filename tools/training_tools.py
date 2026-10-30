@@ -24,6 +24,7 @@ def validar_pacote_formacao(pacote_json: str) -> str:
             "title": package.title,
             "objectives": len(package.learning_objectives),
             "activities": len(package.session_plan),
+            "activity_details": len(package.activities),
             "assessment_items": len(package.assessment),
         },
         ensure_ascii=False,

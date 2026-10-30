@@ -1,6 +1,8 @@
 import streamlit as st
 import logging
+import os
 from uuid import uuid4
+from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.types import Command
 from graph import grafo
@@ -8,12 +10,13 @@ from domain.models import WorkflowRun, WorkflowStatus
 from domain.persistence import WorkflowStore
 
 logger = logging.getLogger(__name__)
-workflow_store = WorkflowStore()
+load_dotenv()
+workflow_store = WorkflowStore(os.getenv("WORKFLOW_DB_PATH", "workspace.db"))
 
 st.set_page_config(page_title="Workspace AI - Startup", page_icon="🚀", layout="wide")
 
 st.title("🚀 Empresa de Agentes AI (Workspace Pessoal & Profissional)")
-st.markdown("O teu sistema centralizado com **Supervisor (Azure GPT-4o)** e **Especialistas (Google Gemini)**.")
+st.markdown("O teu sistema centralizado com **Supervisor (Google Gemini)** e **Especialistas (Google Gemini)**.")
 
 # Inicializar o histórico de chat no Streamlit
 if "messages" not in st.session_state:
@@ -53,7 +56,9 @@ if prompt := st.chat_input("O que precisas de resolver hoje? (Ex: Ideias para Ti
                 stream_mode="values",
             )
             respostas_agentes = []
+            ultimo_estado = {}
             for event in eventos:
+                ultimo_estado = event
                 if "__interrupt__" in event:
                     st.session_state.approval_required = True
                     continue
@@ -69,24 +74,34 @@ if prompt := st.chat_input("O que precisas de resolver hoje? (Ex: Ideias para Ti
                 st.session_state.messages.append({"role": "assistant", "content": resposta_final})
             else:
                 st.warning("O sistema processou o pedido mas não gerou uma resposta direta.")
-            workflow_store.save(
-                WorkflowRun(
-                    request_id=st.session_state.request_id,
-                    workflow="auto",
-                    user_id=st.session_state.thread_id,
-                    objective=prompt,
-                    status=(
-                        WorkflowStatus.APPROVAL_REQUIRED
-                        if st.session_state.get("approval_required", False)
+            run = WorkflowRun(
+                request_id=st.session_state.request_id,
+                workflow="auto",
+                user_id=st.session_state.thread_id,
+                objective=prompt,
+                status=(
+                    WorkflowStatus.APPROVAL_REQUIRED
+                    if st.session_state.get("approval_required", False)
+                    else (
+                        WorkflowStatus.FAILED
+                        if ultimo_estado.get("status") == "failed"
                         else WorkflowStatus.APPROVED
-                    ),
-                )
+                    )
+                ),
             )
-        except Exception:
+            if ultimo_estado.get("quality_report"):
+                run.quality_report = ultimo_estado["quality_report"]
+            if ultimo_estado.get("research_sources"):
+                run.sources = ultimo_estado["research_sources"]
+            run.iteration = ultimo_estado.get("iteration", 0)
+            if ultimo_estado.get("plan"):
+                run.metadata["plan"] = ultimo_estado["plan"]
+            workflow_store.save(run)
+        except Exception as error:
             logger.exception("Falha ao executar o grafo para a sessão %s", st.session_state.thread_id)
             erro_msg = (
-                "❌ Não foi possível processar o pedido neste momento. "
-                "Consulta os logs da aplicação para mais detalhes."
+                "❌ O workflow terminou com erro.\n"
+                f"Erro: {type(error).__name__}: {error}"
             )
             st.error(erro_msg)
             st.session_state.messages.append({"role": "assistant", "content": erro_msg})

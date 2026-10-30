@@ -25,7 +25,10 @@ class WebToolsTests(unittest.TestCase):
                 }
             ],
         }
-        with patch.dict(os.environ, {"TAVILY_API_KEY": "test-key"}):
+        with patch.dict(
+            os.environ,
+            {"TAVILY_API_KEY": "test-key", "RESEARCH_CACHE_ENABLED": "false"},
+        ):
             result = json.loads(pesquisar_web.invoke({"consulta": "Flutter"}))
 
         self.assertEqual(result["resumo"], "Resumo")

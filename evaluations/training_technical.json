@@ -1,0 +1,7 @@
+[
+  {
+    "name": "python-tecnico",
+    "required": ["objetivos", "plano de sessão", "exercícios", "soluções", "fontes"],
+    "minimum_quality_score": 85
+  }
+]
