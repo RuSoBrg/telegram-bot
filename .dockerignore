@@ -8,3 +8,6 @@ __pycache__
 generated_files
 object_storage
 tests
+.dockerignore
+postgres-data/
+__pycache__/
