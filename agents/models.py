@@ -10,6 +10,7 @@ from tools.code_tools import ler_ficheiro_codigo, listar_ficheiros_projeto
 from tools.file_tools import (
     empacotar_artefactos,
     gerar_apresentacao_powerpoint,
+    gerar_documento_excel,
     gerar_documento_pdf,
     gerar_documento_word,
     gerar_fotografia,
@@ -50,6 +51,7 @@ def tools_for(agent: str) -> list[BaseTool]:
         return [
             *common_research,
             gerar_documento_word,
+            gerar_documento_excel,
             gerar_documento_pdf,
             gerar_apresentacao_powerpoint,
             validar_artefactos,
@@ -62,12 +64,25 @@ def tools_for(agent: str) -> list[BaseTool]:
             gerar_fotografia,
             gerar_video,
             gerar_apresentacao_powerpoint,
+            gerar_documento_excel,
             validar_artefactos,
         ]
     if agent == "engenharia":
-        return [*common_research, ler_ficheiro_codigo, listar_ficheiros_projeto, validar_artefactos]
+        return [
+            *common_research,
+            ler_ficheiro_codigo,
+            listar_ficheiros_projeto,
+            gerar_documento_excel,
+            validar_artefactos,
+        ]
     if agent == "vida":
-        return [*common_research, gerar_documento_word, gerar_documento_pdf, validar_artefactos]
+        return [
+            *common_research,
+            gerar_documento_word,
+            gerar_documento_excel,
+            gerar_documento_pdf,
+            validar_artefactos,
+        ]
     return common_research
 
 

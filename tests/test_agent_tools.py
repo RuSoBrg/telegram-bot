@@ -14,7 +14,13 @@ class AgentToolPolicyTests(unittest.TestCase):
         names = {tool.name for tool in tools_for("vida")}
         self.assertEqual(
             names,
-            {"pesquisar_web", "gerar_documento_word", "gerar_documento_pdf", "validar_artefactos"},
+            {
+                "pesquisar_web",
+                "gerar_documento_word",
+                "gerar_documento_excel",
+                "gerar_documento_pdf",
+                "validar_artefactos",
+            },
         )
 
     def test_formador_has_training_delivery_tools(self):

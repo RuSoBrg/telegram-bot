@@ -14,7 +14,19 @@ object_store = create_object_store()
 @tool
 def validar_artefactos(paths: list[str]) -> str:
     """Valida artefactos através das chaves/URIs do ObjectStore."""
-    allowed = {".docx", ".pptx", ".pdf", ".png", ".jpg", ".jpeg", ".mp3", ".wav", ".mp4", ".zip"}
+    allowed = {
+        ".docx",
+        ".pptx",
+        ".pdf",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".mp3",
+        ".wav",
+        ".mp4",
+        ".xlsx",
+        ".zip",
+    }
     artefacts: list[ArtifactRecord] = []
     errors: list[str] = []
     reader = getattr(object_store, "get_bytes", None)
@@ -43,6 +55,7 @@ def validar_artefactos(paths: list[str]) -> str:
                 ".mp3": "audio/mpeg",
                 ".wav": "audio/wav",
                 ".mp4": "video/mp4",
+                ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 ".zip": "application/zip",
             }[suffix]
             artefacts.append(

@@ -10,6 +10,7 @@ from typing import Any
 
 from docx import Document
 from langchain_core.tools import tool
+from openpyxl import Workbook
 from pptx import Presentation
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
@@ -122,6 +123,7 @@ def empacotar_artefactos(
 def gerar_documento_word(
     conteudo: str, titulo: str = "", nome_ficheiro: str = "documento"
 ) -> str:
+    """Cria um documento Word a partir de texto estruturado."""
     try:
         document = Document()
         conteudo = _validate_content(conteudo)
@@ -150,9 +152,44 @@ def gerar_documento_word(
 
 
 @tool
+def gerar_documento_excel(
+    dados_json: str, nome_ficheiro: str = "folha_calculo"
+) -> str:
+    """Cria um ficheiro Excel a partir de uma lista JSON de linhas."""
+    try:
+        dados = json.loads(_validate_content(dados_json))
+        if not isinstance(dados, list):
+            raise ValueError("Os dados devem ser uma lista de dicionários ou listas.")
+
+        workbook = Workbook()
+        worksheet = workbook.active
+        if dados and all(isinstance(item, dict) for item in dados):
+            headers = list(dados[0])
+            worksheet.append(headers)
+            for item in dados:
+                worksheet.append([item.get(header) for header in headers])
+        elif all(isinstance(item, list) for item in dados):
+            for row in dados:
+                worksheet.append(row)
+        else:
+            raise ValueError("As linhas devem ser todas dicionários ou todas listas.")
+
+        output = BytesIO()
+        workbook.save(output)
+        return _publish(
+            _filename(nome_ficheiro, ".xlsx", "excel"),
+            output.getvalue(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    except (OSError, ValueError, TypeError) as error:
+        return _tool_error(error)
+
+
+@tool
 def gerar_apresentacao_powerpoint(
     conteudo: str, titulo: str = "", nome_ficheiro: str = "apresentacao"
 ) -> str:
+    """Cria uma apresentação PowerPoint a partir de texto estruturado."""
     try:
         conteudo = _validate_content(conteudo)
         presentation = Presentation()
@@ -184,6 +221,7 @@ def gerar_apresentacao_powerpoint(
 def gerar_documento_pdf(
     conteudo: str, titulo: str = "", nome_ficheiro: str = "documento"
 ) -> str:
+    """Cria um documento PDF a partir de texto estruturado."""
     try:
         conteudo = _validate_content(conteudo)
         styles = getSampleStyleSheet()
@@ -204,6 +242,7 @@ def gerar_documento_pdf(
 
 @tool
 def gerar_fotografia(prompt: str, nome_ficheiro: str = "imagem", modelo: str = "") -> str:
+    """Gera uma imagem com o modelo configurado."""
     try:
         response = _google_genai_client().models.generate_content(
             model=modelo or os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"),
@@ -222,6 +261,7 @@ def gerar_video(
     modelo: str = "",
     duracao_segundos: int = 8,
 ) -> str:
+    """Gera um vídeo com o modelo configurado."""
     try:
         max_seconds = min(8, load_runtime_limits().max_media_seconds)
         if not 1 <= duracao_segundos <= max_seconds:
