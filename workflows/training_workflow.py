@@ -10,10 +10,12 @@ from agents.planner import create_plan
 from agents.specialists import create_specialist_node
 from domain.limits import load_runtime_limits
 from domain.state import WorkflowState
-from tools.training_tools import validar_pacote_formacao
+
+QUALITY_PLAN_STEP = 9
+END_ROUTE = "__end__"
 
 
-def analyze_requirements(state: WorkflowState) -> dict:
+def analyze_requirements(state: WorkflowState) -> dict[str, object]:
     objective = state.get("objective") or ""
     messages = state.get("messages", [])
     if not objective:
@@ -32,7 +34,7 @@ def analyze_requirements(state: WorkflowState) -> dict:
     }
 
 
-def require_training_package(state: WorkflowState) -> dict:
+def require_training_package(state: WorkflowState) -> dict[str, object]:
     if state.get("status") == "failed":
         return {
             "status": "failed",
@@ -51,22 +53,24 @@ def require_training_package(state: WorkflowState) -> dict:
             completed = [
                 step["order"]
                 for step in plan
-                if step.get("order", 0) < 9
+                if step.get("order", 0) < QUALITY_PLAN_STEP
             ]
             return {
                 "status": "producing",
                 "quality_feedback": "",
                 "completed_plan_steps": completed,
-                "current_plan_step": 9 if plan else 0,
+                "current_plan_step": QUALITY_PLAN_STEP if plan else 0,
                 "plan": [
                     {
                         **step,
                         "status": (
                             "done"
                             if step.get("order", 0) in completed
-                            else "in_progress"
-                            if step.get("order") == 9
-                            else step.get("status", "pending")
+                            else (
+                                "in_progress"
+                                if step.get("order") == QUALITY_PLAN_STEP
+                                else step.get("status", "pending")
+                            )
                         ),
                     }
                     for step in plan
@@ -96,30 +100,35 @@ def build_training_workflow():
     builder.add_conditional_edges(
         "formador",
         tools_condition,
-        {"tools": "tools_formador", "__end__": "validar_pacote"},
+        {"tools": "tools_formador", END_ROUTE: "validar_pacote"},
     )
     builder.add_edge("tools_formador", "formador")
     builder.add_conditional_edges(
         "validar_pacote",
-        lambda state: (
-            "__end__"
-            if state.get("status") == "failed"
-            else ("formador" if state.get("quality_feedback") else "qualidade")
-        ),
-        {"formador": "formador", "qualidade": "qualidade", "__end__": END},
+        _route_after_package,
+        {"formador": "formador", "qualidade": "qualidade", END_ROUTE: END},
     )
     builder.add_conditional_edges(
         "qualidade",
-        lambda state: (
-            "__end__"
-            if state.get("status") == "failed"
-            else (
-                "formador"
-            if state.get("quality_feedback")
-            and state.get("quality_iterations", 0)
-            < load_runtime_limits().max_quality_iterations
-            else "__end__")
-        ),
-        {"formador": "formador", "__end__": END},
+        _route_after_quality,
+        {"formador": "formador", END_ROUTE: END},
     )
     return builder.compile()
+
+
+def _route_after_package(state: WorkflowState) -> str:
+    if state.get("status") == "failed":
+        return END_ROUTE
+    return "formador" if state.get("quality_feedback") else "qualidade"
+
+
+def _route_after_quality(state: WorkflowState) -> str:
+    if state.get("status") == "failed":
+        return END_ROUTE
+    if (
+        state.get("quality_feedback")
+        and state.get("quality_iterations", 0)
+        < load_runtime_limits().max_quality_iterations
+    ):
+        return "formador"
+    return END_ROUTE
