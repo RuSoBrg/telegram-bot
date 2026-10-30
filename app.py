@@ -3,11 +3,12 @@ import logging
 import os
 from uuid import uuid4
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 from graph import grafo
 from domain.models import WorkflowRun, WorkflowStatus
 from domain.persistence import WorkflowStore
+from domain.events import iter_app_events
 
 logger = logging.getLogger(__name__)
 load_dotenv()
@@ -57,16 +58,14 @@ if prompt := st.chat_input("O que precisas de resolver hoje? (Ex: Ideias para Ti
             )
             respostas_agentes = []
             ultimo_estado = {}
-            for event in eventos:
-                ultimo_estado = event
-                if "__interrupt__" in event:
+            for event in iter_app_events(eventos):
+                ultimo_estado = event.metadata.get("state", ultimo_estado)
+                if event.type == "status" and event.content == "approval_required":
                     st.session_state.approval_required = True
-                    continue
-                if not event.get("messages"):
-                    continue
-                ultima_msg = event["messages"][-1]
-                if isinstance(ultima_msg, AIMessage) and ultima_msg.content:
-                    respostas_agentes.append(ultima_msg.content)
+                elif event.type == "message":
+                    respostas_agentes.append(event.content)
+                elif event.type == "error":
+                    st.error(event.content)
 
             if respostas_agentes:
                 resposta_final = respostas_agentes[-1]
@@ -110,10 +109,26 @@ if st.session_state.approval_required:
     st.info("O output passou na revisão automática e aguarda a tua aprovação.")
     col_approve, col_reject = st.columns(2)
     if col_approve.button("Aprovar e concluir"):
-        list(grafo.stream(Command(resume="approved"), config=config, stream_mode="values"))
+        list(
+            iter_app_events(
+                grafo.stream(
+                    Command(resume="approved"),
+                    config=config,
+                    stream_mode="values",
+                )
+            )
+        )
         st.session_state.approval_required = False
         st.rerun()
     if col_reject.button("Rejeitar"):
-        list(grafo.stream(Command(resume="rejected"), config=config, stream_mode="values"))
+        list(
+            iter_app_events(
+                grafo.stream(
+                    Command(resume="rejected"),
+                    config=config,
+                    stream_mode="values",
+                )
+            )
+        )
         st.session_state.approval_required = False
         st.warning("Output rejeitado. Indica as alterações pretendidas.")

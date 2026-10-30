@@ -20,8 +20,6 @@ class WorkflowState(TypedDict, total=False):
     approval_required: bool
     status: str
     errors: list[str]
-    next_agent: str
     instruction: str
     quality_feedback: str
     quality_iterations: int
-    quality_target: str

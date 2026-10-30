@@ -21,6 +21,7 @@ from tools.file_tools import (
 from tools.training_tools import validar_pacote_formacao
 from tools.validation_tools import validar_artefactos
 from tools.web_tools import pesquisar_web
+from domain.models import RequirementsContext
 
 load_dotenv()
 
@@ -149,3 +150,11 @@ def supervisor_model():
         temperature=0.1,
     )
     return model.with_structured_output(RoutingDecision)
+
+
+def requirements_model():
+    return ChatGoogleGenerativeAI(
+        model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
+        temperature=0,
+        max_retries=1,
+    ).with_structured_output(RequirementsContext)

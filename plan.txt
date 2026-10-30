@@ -226,7 +226,7 @@ Aprovar / Rejeitar / Alterar pedido
 Substituir MemorySaver por persistência durável:
 •	SQLite para desenvolvimento.
 •	PostgreSQL para produção.
-•	Redis para locks e tarefas temporárias.
+•	Checkpointer SqliteSaver para orquestração e estado dos workflows.
 •	Object storage para artefactos.
 Guardar:
 •	Conversas.

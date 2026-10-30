@@ -1,37 +1,48 @@
 import json
 
-from langchain_core.messages import HumanMessage, ToolMessage
-from langgraph.graph import END, START, StateGraph
-from langgraph.prebuilt import ToolNode, tools_condition
+from langchain_core.messages import SystemMessage, ToolMessage
+from langgraph.graph import START, StateGraph
+from langgraph.prebuilt import ToolNode
+from langgraph.types import Command
 
 from agents.quality_reviewer import create_quality_node
 from agents.models import tools_for
+from agents.models import requirements_model
 from agents.planner import create_plan
 from agents.specialists import create_specialist_node
 from domain.limits import load_runtime_limits
 from domain.state import WorkflowState
 
 QUALITY_PLAN_STEP = 9
-END_ROUTE = "__end__"
 
 
-def analyze_requirements(state: WorkflowState) -> dict[str, object]:
-    objective = state.get("objective") or ""
+def analyze_requirements(state: WorkflowState):
     messages = state.get("messages", [])
-    if not objective:
-        for message in reversed(messages):
-            if isinstance(message, HumanMessage):
-                objective = str(message.content)
-                break
-            if isinstance(message, dict) and message.get("type") == "human":
-                objective = str(message.get("content", ""))
-                break
-    return {
-        "objective": objective,
-        "status": "researching",
-        "constraints": state.get("constraints", []),
-        "plan": [step.__dict__ for step in create_plan(objective)],
-    }
+    objective = state.get("objective") or ""
+    if not messages:
+        raise ValueError("Não é possível extrair requisitos sem mensagens.")
+    context = requirements_model().invoke(
+        [
+            SystemMessage(
+                content=(
+                    "Extrai o contexto do pedido do utilizador. "
+                    "Devolve apenas os campos do esquema estruturado."
+                )
+            ),
+            *messages,
+        ]
+    )
+    objective = context.objective or objective
+    return Command(
+        goto="formador",
+        update={
+            "objective": objective,
+            "audience": context.audience,
+            "status": "researching",
+            "constraints": context.constraints or state.get("constraints", []),
+            "plan": [step.__dict__ for step in create_plan(objective)],
+        },
+    )
 
 
 def require_training_package(state: WorkflowState) -> dict[str, object]:
@@ -87,48 +98,43 @@ def require_training_package(state: WorkflowState) -> dict[str, object]:
 
 def build_training_workflow():
     builder = StateGraph(WorkflowState)
-    builder.add_node("requisitos", analyze_requirements)
-    builder.add_node("formador", create_specialist_node("formador"))
-    builder.add_node("validar_pacote", require_training_package)
-    builder.add_node("tools_formador", ToolNode(tools_for("formador")))
+    builder.add_node("requisitos", analyze_requirements, destinations=("formador",))
+    builder.add_node(
+        "formador",
+        create_specialist_node("formador", "tools_formador", "validar_pacote"),
+        destinations=("tools_formador", "qualidade", "__end__"),
+    )
+    builder.add_node(
+        "validar_pacote",
+        lambda state: _package_command(require_training_package(state)),
+        destinations=("formador", "qualidade", "__end__"),
+    )
+    tool_node = ToolNode(tools_for("formador"))
+    builder.add_node(
+        "tools_formador",
+        lambda state: _run_training_tools(tool_node, state),
+        destinations=("formador", "__end__"),
+    )
     builder.add_node(
         "qualidade",
-        create_quality_node(load_runtime_limits().max_quality_iterations),
+        create_quality_node(
+            load_runtime_limits().max_quality_iterations,
+            target="formador",
+        ),
+        destinations=("formador", "__end__"),
     )
     builder.add_edge(START, "requisitos")
-    builder.add_edge("requisitos", "formador")
-    builder.add_conditional_edges(
-        "formador",
-        tools_condition,
-        {"tools": "tools_formador", END_ROUTE: "validar_pacote"},
-    )
-    builder.add_edge("tools_formador", "formador")
-    builder.add_conditional_edges(
-        "validar_pacote",
-        _route_after_package,
-        {"formador": "formador", "qualidade": "qualidade", END_ROUTE: END},
-    )
-    builder.add_conditional_edges(
-        "qualidade",
-        _route_after_quality,
-        {"formador": "formador", END_ROUTE: END},
-    )
     return builder.compile()
 
 
-def _route_after_package(state: WorkflowState) -> str:
-    if state.get("status") == "failed":
-        return END_ROUTE
-    return "formador" if state.get("quality_feedback") else "qualidade"
+def _run_training_tools(node: ToolNode, state: WorkflowState):
+    return Command(goto="formador", update=node.invoke(state))
 
 
-def _route_after_quality(state: WorkflowState) -> str:
+def _package_command(state: WorkflowState):
     if state.get("status") == "failed":
-        return END_ROUTE
-    if (
-        state.get("quality_feedback")
-        and state.get("quality_iterations", 0)
-        < load_runtime_limits().max_quality_iterations
-    ):
-        return "formador"
-    return END_ROUTE
+        return Command(goto="__end__", update=state)
+    return Command(
+        goto="formador" if state.get("quality_feedback") else "qualidade",
+        update=state,
+    )

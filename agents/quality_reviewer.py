@@ -2,7 +2,7 @@ import json
 import os
 
 from langchain_core.messages import SystemMessage, ToolMessage
-from langgraph.types import interrupt
+from langgraph.types import Command, interrupt
 
 from agents.models import quality_models, quality_tools
 from agents.runtime import invoke_with_fallback, load_prompt
@@ -37,36 +37,46 @@ def _observations(messages):
             payload = json.loads(str(message.content))
         except (TypeError, json.JSONDecodeError):
             continue
-        if payload.get("tipo") == "ficheiro_gerado" and payload.get("path"):
+        if payload.get("tipo") == "ficheiro_gerado" and payload.get("uri"):
             artifacts.append(payload)
         artifacts.extend(payload.get("artefacts", []))
         sources.extend(payload.get("fontes", []))
     return artifacts, sources
 
 
-def create_quality_node(max_iterations: int):
+def create_quality_node(max_iterations: int, target: str = "formador"):
     reviewer, reviewer_fallback, research, research_fallback = quality_models()
 
     def quality_node(state: WorkflowState):
-        target = state.get("quality_target", "agente")
         iteration = state.get("quality_iterations", 0)
         if iteration >= max_iterations:
             detail = (
                 f"A revisão excedeu o limite de {max_iterations} iterações."
             )
-            return {
-                "messages": [ToolMessage(content=f"❌ {detail}", tool_call_id="quality-limit")],
-                "quality_feedback": "",
-                "status": "failed",
-                "quality_iterations": iteration,
-                "errors": [detail],
-            }
+            return Command(
+                goto="__end__",
+                update={
+                    "messages": [
+                        ToolMessage(content=f"❌ {detail}", tool_call_id="quality-limit")
+                    ],
+                    "quality_feedback": "",
+                    "status": "failed",
+                    "quality_iterations": iteration,
+                    "errors": [detail],
+                },
+            )
 
         artifacts, sources = _observations(state.get("messages", []))
         validation = (
             json.loads(
                 validar_artefactos.invoke(
-                    {"paths": [item["path"] for item in artifacts if item.get("path")]}
+                    {
+                        "paths": [
+                            item.get("key", item["uri"])
+                            for item in artifacts
+                            if item.get("uri")
+                        ]
+                    }
                 )
             )
             if artifacts
@@ -113,19 +123,22 @@ def create_quality_node(max_iterations: int):
                 score=0,
                 blocking_issues=[f"A revisão automática falhou: {detail}"],
             )
-            return {
-                "messages": [
-                    ToolMessage(
-                        content=f"❌ A supervisão falhou e o workflow foi terminado. Erro: {detail}",
-                        tool_call_id="quality-error",
-                    )
-                ],
-                "quality_report": report.model_dump(mode="json"),
-                "quality_feedback": "",
-                "quality_iterations": iteration + 1,
-                "status": "failed",
-                "errors": [f"Falha na supervisão automática: {detail}"],
-            }
+            return Command(
+                goto="__end__",
+                update={
+                    "messages": [
+                        ToolMessage(
+                            content=f"❌ A supervisão falhou e o workflow foi terminado. Erro: {detail}",
+                            tool_call_id="quality-error",
+                        )
+                    ],
+                    "quality_report": report.model_dump(mode="json"),
+                    "quality_feedback": "",
+                    "quality_iterations": iteration + 1,
+                    "status": "failed",
+                    "errors": [f"Falha na supervisão automática: {detail}"],
+                },
+            )
 
         blocking = [
             issue
@@ -190,12 +203,25 @@ def create_quality_node(max_iterations: int):
             if approval_request and os.getenv("REQUIRE_HUMAN_APPROVAL", "true").lower() == "true":
                 approval = interrupt({**approval_request.as_dict(), "score": report.score})
                 if approval != "approved":
-                    return {**result, "status": "rejected", "quality_feedback": "Pacote rejeitado."}
-            return {**result, "status": "approved", "quality_feedback": ""}
-        return {
-            **result,
-            "status": "reviewing",
-            "quality_feedback": feedback or "Corrige os problemas indicados na revisão.",
-        }
+                    return Command(
+                        goto=target,
+                        update={
+                            **result,
+                            "status": "rejected",
+                            "quality_feedback": "Pacote rejeitado.",
+                        },
+                    )
+            return Command(
+                goto="__end__",
+                update={**result, "status": "approved", "quality_feedback": ""},
+            )
+        return Command(
+            goto=target,
+            update={
+                **result,
+                "status": "reviewing",
+                "quality_feedback": feedback or "Corrige os problemas indicados na revisão.",
+            },
+        )
 
     return quality_node

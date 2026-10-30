@@ -1,32 +1,37 @@
-import json
 import hashlib
-from pathlib import Path
+import json
+from pathlib import PurePosixPath
 
 from langchain_core.tools import tool
 
 from domain.models import ArtifactRecord
+from domain.object_store import create_object_store
 
 
-GENERATED_DIR = (Path(__file__).resolve().parent.parent / "generated_files").resolve()
+object_store = create_object_store()
 
 
 @tool
 def validar_artefactos(paths: list[str]) -> str:
-    """Valida que os ficheiros gerados existem, têm tamanho e extensões suportadas."""
+    """Valida artefactos através das chaves/URIs do ObjectStore."""
     allowed = {".docx", ".pptx", ".pdf", ".png", ".jpg", ".jpeg", ".mp3", ".wav", ".mp4", ".zip"}
     artefacts: list[ArtifactRecord] = []
     errors: list[str] = []
-    for raw_path in paths:
-        path = Path(raw_path).resolve()
-        if GENERATED_DIR not in path.parents:
-            errors.append(f"Caminho fora da pasta de artefactos: {path.name}")
+    reader = getattr(object_store, "get_bytes", None)
+    if reader is None:
+        return json.dumps({"valid": False, "artefacts": [], "errors": ["Backend sem leitura de artefactos."]})
+    for key in paths:
+        name = PurePosixPath(key.split("?", 1)[0]).name
+        suffix = PurePosixPath(name).suffix.lower()
+        try:
+            data = reader(key)
+        except (FileNotFoundError, KeyError, ValueError):
+            errors.append(f"Ficheiro inexistente: {name}")
             continue
-        if path.suffix.lower() not in allowed:
-            errors.append(f"Extensão não suportada: {path.name}")
-        elif not path.is_file():
-            errors.append(f"Ficheiro inexistente: {path.name}")
-        elif path.stat().st_size == 0:
-            errors.append(f"Ficheiro vazio: {path.name}")
+        if suffix not in allowed:
+            errors.append(f"Extensão não suportada: {name}")
+        elif not data:
+            errors.append(f"Ficheiro vazio: {name}")
         else:
             mime = {
                 ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -39,11 +44,21 @@ def validar_artefactos(paths: list[str]) -> str:
                 ".wav": "audio/wav",
                 ".mp4": "video/mp4",
                 ".zip": "application/zip",
-            }[path.suffix.lower()]
-            artefacts.append(ArtifactRecord(filename=path.name, path=str(path), mime_type=mime))
-            artefacts[-1].size_bytes = path.stat().st_size
-            artefacts[-1].sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+            }[suffix]
+            artefacts.append(
+                ArtifactRecord(
+                    filename=name,
+                    path=object_store.get_url(key),
+                    mime_type=mime,
+                    size_bytes=len(data),
+                    sha256=hashlib.sha256(data).hexdigest(),
+                )
+            )
     return json.dumps(
-        {"valid": not errors, "artefacts": [item.model_dump(mode="json") for item in artefacts], "errors": errors},
+        {
+            "valid": not errors,
+            "artefacts": [item.model_dump(mode="json") for item in artefacts],
+            "errors": errors,
+        },
         ensure_ascii=False,
     )

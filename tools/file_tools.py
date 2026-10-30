@@ -1,4 +1,5 @@
 import base64
+from io import BytesIO
 import json
 import logging
 import os
@@ -6,9 +7,7 @@ import re
 import time
 import zipfile
 from html import escape
-from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from docx import Document
 from langchain_core.tools import tool
@@ -19,44 +18,48 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 from domain.limits import load_runtime_limits
+from domain.object_store import ObjectStore, create_object_store
 
 logger = logging.getLogger(__name__)
-BASE_DIR = Path(__file__).resolve().parent.parent
-GENERATED_DIR = BASE_DIR / "generated_files"
+store: ObjectStore = create_object_store()
 
-def _output_path(filename: str, extension: str, prefix: str) -> Path:
-    requested_name = Path(filename).stem if filename.strip() else prefix
-    safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", requested_name).strip(".-_")
-    if not safe_name:
-        safe_name = prefix
-    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
-    return GENERATED_DIR / f"{safe_name}-{uuid4().hex[:8]}{extension}"
+
+def _filename(filename: str, extension: str, prefix: str) -> str:
+    requested = filename.strip() or prefix
+    safe = re.sub(r"[^a-zA-Z0-9._-]+", "-", requested).strip(".-_") or prefix
+    return f"{safe}-{time.time_ns()}{extension}"
 
 
 def _validate_content(content: str) -> str:
     if not content or not content.strip():
         raise ValueError("O conteúdo do ficheiro não pode estar vazio.")
-    max_length = load_runtime_limits().max_generated_content_chars
-    if len(content) > max_length:
-        raise ValueError(f"O conteúdo excede o limite de {max_length} caracteres.")
+    limit = load_runtime_limits().max_generated_content_chars
+    if len(content) > limit:
+        raise ValueError(f"O conteúdo excede o limite de {limit} caracteres.")
     return content.strip()
 
 
-def _artifact(path: Path, mime_type: str) -> str:
+def _artifact(filename: str, uri: str, mime_type: str, data: bytes) -> str:
     max_size = int(os.getenv("MAX_ARTIFACT_BYTES", str(50 * 1024 * 1024)))
-    size = path.stat().st_size
-    if size > max_size:
-        path.unlink()
+    if len(data) > max_size:
         raise ValueError(f"O artefacto excede o limite de {max_size} bytes.")
     return json.dumps(
         {
             "tipo": "ficheiro_gerado",
-            "filename": path.name,
-            "path": str(path),
+            "filename": filename,
+            "key": filename,
+            "uri": uri,
             "mime_type": mime_type,
+            "size_bytes": len(data),
+            "sha256": __import__("hashlib").sha256(data).hexdigest(),
         },
         ensure_ascii=False,
     )
+
+
+def _publish(filename: str, data: bytes, mime_type: str) -> str:
+    uri = store.put_bytes(filename, data)
+    return _artifact(filename, uri, mime_type, data)
 
 
 def _tool_error(error: Exception) -> str:
@@ -75,14 +78,12 @@ def _require_env(*names: str) -> dict[str, str]:
 def _google_genai_client():
     from google import genai
 
-    api_key = _require_env("GOOGLE_API_KEY")["GOOGLE_API_KEY"]
-    return genai.Client(api_key=api_key)
+    return genai.Client(api_key=_require_env("GOOGLE_API_KEY")["GOOGLE_API_KEY"])
 
 
 def _inline_bytes(response: Any) -> bytes:
     for candidate in getattr(response, "candidates", []) or []:
-        content = getattr(candidate, "content", None)
-        for part in getattr(content, "parts", []) or []:
+        for part in getattr(getattr(candidate, "content", None), "parts", []) or []:
             inline_data = getattr(part, "inline_data", None)
             data = getattr(inline_data, "data", None) if inline_data else None
             if data:
@@ -94,46 +95,38 @@ def _lines(content: str) -> list[str]:
     return [line.strip() for line in content.splitlines() if line.strip()]
 
 
+def _read_key(key: str) -> bytes:
+    reader = getattr(store, "get_bytes", None)
+    if reader is None:
+        raise ValueError("Este backend não suporta leitura de artefactos para ZIP.")
+    return reader(key)
+
+
 @tool
 def empacotar_artefactos(
-    caminhos: list[str],
-    nome_ficheiro: str = "pacote-formacao",
+    caminhos: list[str], nome_ficheiro: str = "pacote-formacao"
 ) -> str:
-    """Cria um ZIP com ficheiros gerados e devolve-o para envio no Telegram.
-    Só aceita ficheiros dentro da pasta generated_files e ignora caminhos inexistentes
-    com um erro explícito."""
+    """Cria um ZIP em memória a partir de chaves de objectos."""
     try:
         if not caminhos:
             raise ValueError("É necessário indicar pelo menos um ficheiro.")
-        generated_dir = GENERATED_DIR.resolve()
-        resolved_paths: list[Path] = []
-        for raw_path in caminhos:
-            path = Path(raw_path).resolve()
-            if generated_dir not in path.parents or not path.is_file():
-                raise ValueError(f"Ficheiro inválido ou fora da pasta de artefactos: {raw_path}")
-            resolved_paths.append(path)
-        archive = _output_path(nome_ficheiro, ".zip", "pacote")
-        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-            for path in resolved_paths:
-                bundle.write(path, arcname=path.name)
-        return _artifact(archive, "application/zip")
-    except (OSError, ValueError) as error:
+        output = BytesIO()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            for key in caminhos:
+                bundle.writestr(key.rsplit("/", 1)[-1], _read_key(key))
+        data = output.getvalue()
+        return _publish(_filename(nome_ficheiro, ".zip", "pacote"), data, "application/zip")
+    except (OSError, ValueError, KeyError) as error:
         return _tool_error(error)
 
 
 @tool
 def gerar_documento_word(
-    conteudo: str,
-    titulo: str = "",
-    nome_ficheiro: str = "documento",
+    conteudo: str, titulo: str = "", nome_ficheiro: str = "documento"
 ) -> str:
-    """Gera um ficheiro Word .docx a partir de texto estruturado e devolve os dados para o Telegram.
-    Usa esta ferramenta quando o utilizador pedir um documento Word, DOCX, relatório ou plano
-    para descarregar. O conteúdo deve incluir todo o texto final."""
     try:
-        conteudo = _validate_content(conteudo)
-        path = _output_path(nome_ficheiro, ".docx", "documento")
         document = Document()
+        conteudo = _validate_content(conteudo)
         if titulo.strip():
             document.add_heading(titulo.strip(), level=0)
         for line in _lines(conteudo):
@@ -147,9 +140,11 @@ def gerar_documento_word(
                 document.add_paragraph(line[2:], style="List Bullet")
             else:
                 document.add_paragraph(line)
-        document.save(path)
-        return _artifact(
-            path,
+        output = BytesIO()
+        document.save(output)
+        return _publish(
+            _filename(nome_ficheiro, ".docx", "documento"),
+            output.getvalue(),
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
     except (OSError, ValueError) as error:
@@ -158,24 +153,16 @@ def gerar_documento_word(
 
 @tool
 def gerar_apresentacao_powerpoint(
-    conteudo: str,
-    titulo: str = "",
-    nome_ficheiro: str = "apresentacao",
+    conteudo: str, titulo: str = "", nome_ficheiro: str = "apresentacao"
 ) -> str:
-    """Gera uma apresentação PowerPoint .pptx e devolve os dados para o Telegram.
-    Usa esta ferramenta quando o utilizador pedir slides, PowerPoint ou PPTX.
-    Separe os slides com linhas vazias; cada bloco torna-se um slide."""
     try:
         conteudo = _validate_content(conteudo)
-        path = _output_path(nome_ficheiro, ".pptx", "apresentacao")
         presentation = Presentation()
         title = titulo.strip() or _lines(conteudo)[0][:120]
         title_slide = presentation.slides.add_slide(presentation.slide_layouts[0])
         title_slide.shapes.title.text = title
         title_slide.placeholders[1].text = "Gerado pelo assistente"
-
-        blocks = [block.strip() for block in re.split(r"\n\s*\n", conteudo) if block.strip()]
-        for block in blocks:
+        for block in (b.strip() for b in re.split(r"\n\s*\n", conteudo) if b.strip()):
             lines = _lines(block)
             slide = presentation.slides.add_slide(presentation.slide_layouts[1])
             slide.shapes.title.text = lines[0][:120]
@@ -184,10 +171,11 @@ def gerar_apresentacao_powerpoint(
             for index, line in enumerate(lines[1:] or lines):
                 paragraph = body.paragraphs[0] if index == 0 else body.add_paragraph()
                 paragraph.text = line.removeprefix("- ").removeprefix("* ")
-                paragraph.level = 0
-        presentation.save(path)
-        return _artifact(
-            path,
+        output = BytesIO()
+        presentation.save(output)
+        return _publish(
+            _filename(nome_ficheiro, ".pptx", "apresentacao"),
+            output.getvalue(),
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         )
     except (OSError, ValueError) as error:
@@ -196,50 +184,35 @@ def gerar_apresentacao_powerpoint(
 
 @tool
 def gerar_documento_pdf(
-    conteudo: str,
-    titulo: str = "",
-    nome_ficheiro: str = "documento",
+    conteudo: str, titulo: str = "", nome_ficheiro: str = "documento"
 ) -> str:
-    """Gera um ficheiro PDF e devolve os dados para o Telegram.
-    Usa esta ferramenta quando o utilizador pedir um PDF, relatório ou documento PDF."""
     try:
         conteudo = _validate_content(conteudo)
-        path = _output_path(nome_ficheiro, ".pdf", "documento")
         styles = getSampleStyleSheet()
         story: list[Any] = []
         if titulo.strip():
-            story.append(Paragraph(escape(titulo.strip()), styles["Title"]))
-            story.append(Spacer(1, 8 * mm))
+            story.extend([Paragraph(escape(titulo.strip()), styles["Title"]), Spacer(1, 8 * mm)])
         for line in _lines(conteudo):
-            if line.startswith("#"):
-                story.append(Paragraph(escape(line.lstrip("# ").strip()), styles["Heading2"]))
-            else:
-                story.append(Paragraph(escape(line), styles["BodyText"]))
-            story.append(Spacer(1, 3 * mm))
-        SimpleDocTemplate(str(path), pagesize=A4).build(story)
-        return _artifact(path, "application/pdf")
+            style = styles["Heading2"] if line.startswith("#") else styles["BodyText"]
+            story.extend(
+                [Paragraph(escape(line.lstrip("# ").strip()), style), Spacer(1, 3 * mm)]
+            )
+        output = BytesIO()
+        SimpleDocTemplate(output, pagesize=A4).build(story)
+        return _publish(_filename(nome_ficheiro, ".pdf", "documento"), output.getvalue(), "application/pdf")
     except (OSError, ValueError) as error:
         return _tool_error(error)
 
 
 @tool
-def gerar_fotografia(
-    prompt: str,
-    nome_ficheiro: str = "imagem",
-    modelo: str = "",
-) -> str:
-    """Gera uma imagem PNG a partir de uma descrição usando Google GenAI e prepara-a para envio no Telegram.
-    Usa esta ferramenta para fotografias, ilustrações, thumbnails, posters ou imagens de marketing."""
+def gerar_fotografia(prompt: str, nome_ficheiro: str = "imagem", modelo: str = "") -> str:
     try:
-        prompt = _validate_content(prompt)
         response = _google_genai_client().models.generate_content(
             model=modelo or os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"),
-            contents=prompt,
+            contents=_validate_content(prompt),
             config={"response_modalities": ["TEXT", "IMAGE"]},
         )
-        path = _output_path(nome_ficheiro, ".png", "imagem")
-        path.write_bytes(_inline_bytes(response))
-        return _artifact(path, "image/png")
+        return _publish(_filename(nome_ficheiro, ".png", "imagem"), _inline_bytes(response), "image/png")
     except (OSError, RuntimeError, ValueError) as error:
         return _tool_error(error)
 
@@ -251,17 +224,14 @@ def gerar_video(
     modelo: str = "",
     duracao_segundos: int = 8,
 ) -> str:
-    """Gera um vídeo MP4 a partir de uma descrição usando Google Veo e prepara-o para envio no Telegram.
-    Usa esta ferramenta para vídeos, reels, anúncios e clips. A geração pode demorar alguns minutos."""
     try:
-        prompt = _validate_content(prompt)
         max_seconds = min(8, load_runtime_limits().max_media_seconds)
         if not 1 <= duracao_segundos <= max_seconds:
             raise ValueError(f"A duração do vídeo deve estar entre 1 e {max_seconds} segundos.")
         client = _google_genai_client()
         operation = client.models.generate_videos(
             model=modelo or os.getenv("GEMINI_VIDEO_MODEL", "veo-3.1-generate-preview"),
-            prompt=prompt,
+            prompt=_validate_content(prompt),
             config={"duration_seconds": duracao_segundos, "number_of_videos": 1},
         )
         deadline = time.monotonic() + load_runtime_limits().tool_timeout_seconds
@@ -273,36 +243,23 @@ def gerar_video(
         if getattr(operation, "error", None):
             raise RuntimeError(str(operation.error))
         generated = getattr(getattr(operation, "response", None), "generated_videos", None) or []
-        if not generated:
-            raise RuntimeError("O modelo não devolveu um vídeo.")
-        video = getattr(generated[0], "video", None)
-        video_bytes = getattr(video, "video_bytes", None) if video else None
-        if not video_bytes:
+        video = getattr(generated[0], "video", None) if generated else None
+        data = getattr(video, "video_bytes", None) if video else None
+        if not data:
             raise RuntimeError("A resposta do modelo não contém os bytes do vídeo.")
-        path = _output_path(nome_ficheiro, ".mp4", "video")
-        path.write_bytes(video_bytes)
-        return _artifact(path, "video/mp4")
+        return _publish(_filename(nome_ficheiro, ".mp4", "video"), data, "video/mp4")
     except (OSError, RuntimeError, ValueError) as error:
         return _tool_error(error)
 
 
 @tool
-def gerar_audio(
-    texto: str,
-    nome_ficheiro: str = "audio",
-    idioma: str = "pt-PT",
-) -> str:
-    """Gera áudio MP3 falado a partir de texto usando Google Cloud Text-to-Speech.
-    Usa esta ferramenta para narrações, voz-off, anúncios e leitura de conteúdos.
-    Requer GOOGLE_CLOUD_PROJECT e credenciais ADC configuradas."""
+def gerar_audio(texto: str, nome_ficheiro: str = "audio", idioma: str = "pt-PT") -> str:
     try:
-        texto = _validate_content(texto)
         _require_env("GOOGLE_CLOUD_PROJECT")
         from google.cloud import texttospeech
 
-        client = texttospeech.TextToSpeechClient()
-        response = client.synthesize_speech(
-            input=texttospeech.SynthesisInput(text=texto),
+        response = texttospeech.TextToSpeechClient().synthesize_speech(
+            input=texttospeech.SynthesisInput(text=_validate_content(texto)),
             voice=texttospeech.VoiceSelectionParams(
                 language_code=idioma,
                 name="pt-PT-Wavenet-A" if idioma == "pt-PT" else "",
@@ -311,23 +268,16 @@ def gerar_audio(
                 audio_encoding=texttospeech.AudioEncoding.MP3
             ),
         )
-        path = _output_path(nome_ficheiro, ".mp3", "audio")
-        path.write_bytes(response.audio_content)
-        return _artifact(path, "audio/mpeg")
+        return _publish(_filename(nome_ficheiro, ".mp3", "audio"), response.audio_content, "audio/mpeg")
     except (OSError, RuntimeError, ValueError) as error:
         return _tool_error(error)
 
 
 @tool
 def gerar_musica(
-    prompt: str,
-    nome_ficheiro: str = "musica",
-    duracao_segundos: int = 30,
+    prompt: str, nome_ficheiro: str = "musica", duracao_segundos: int = 30
 ) -> str:
-    """Gera música instrumental com Vertex AI Lyria e prepara o ficheiro WAV para envio.
-    Requer GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION e credenciais ADC com acesso ao Lyria."""
     try:
-        prompt = _validate_content(prompt)
         max_seconds = min(60, load_runtime_limits().max_media_seconds)
         if not 1 <= duracao_segundos <= max_seconds:
             raise ValueError(f"A duração da música deve estar entre 1 e {max_seconds} segundos.")
@@ -336,28 +286,21 @@ def gerar_musica(
         from google.auth.transport.requests import AuthorizedSession
 
         credentials, _ = google.auth.default()
-        session = AuthorizedSession(credentials)
-        location = config["GOOGLE_CLOUD_LOCATION"]
-        url = (
-            f"https://{location}-aiplatform.googleapis.com/v1/"
-            f"projects/{config['GOOGLE_CLOUD_PROJECT']}/locations/{location}/"
-            f"publishers/google/models/{os.getenv('VERTEX_MUSIC_MODEL', 'lyria-002')}:predict"
-        )
-        response = session.post(
-            url,
+        response = AuthorizedSession(credentials).post(
+            f"https://{config['GOOGLE_CLOUD_LOCATION']}-aiplatform.googleapis.com/v1/"
+            f"projects/{config['GOOGLE_CLOUD_PROJECT']}/locations/{config['GOOGLE_CLOUD_LOCATION']}/"
+            f"publishers/google/models/{os.getenv('VERTEX_MUSIC_MODEL', 'lyria-002')}:predict",
             json={
-                "instances": [{"prompt": prompt}],
+                "instances": [{"prompt": _validate_content(prompt)}],
                 "parameters": {"duration_seconds": duracao_segundos},
             },
             timeout=load_runtime_limits().tool_timeout_seconds,
         )
         response.raise_for_status()
         predictions = response.json().get("predictions", [])
-        encoded_audio = predictions[0].get("audioContent") if predictions else None
-        if not encoded_audio:
+        encoded = predictions[0].get("audioContent") if predictions else None
+        if not encoded:
             raise RuntimeError("O modelo Lyria não devolveu áudio.")
-        path = _output_path(nome_ficheiro, ".wav", "musica")
-        path.write_bytes(base64.b64decode(encoded_audio))
-        return _artifact(path, "audio/wav")
+        return _publish(_filename(nome_ficheiro, ".wav", "musica"), base64.b64decode(encoded), "audio/wav")
     except (OSError, RuntimeError, ValueError, IndexError) as error:
         return _tool_error(error)

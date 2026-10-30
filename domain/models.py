@@ -68,6 +68,12 @@ class TrainingPackage(BaseModel):
     artifacts_to_generate: list[str] = Field(default_factory=list)
 
 
+class RequirementsContext(BaseModel):
+    objective: str = ""
+    audience: str = ""
+    constraints: list[str] = Field(default_factory=list)
+
+
 class WorkflowRun(BaseModel):
     request_id: str
     workflow: str
