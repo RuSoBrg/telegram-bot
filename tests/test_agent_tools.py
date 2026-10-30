@@ -9,7 +9,6 @@ class AgentToolPolicyTests(unittest.TestCase):
         self.assertIn("pesquisar_web", names)
         self.assertIn("ler_ficheiro_codigo", names)
         self.assertNotIn("gerar_video", names)
-        self.assertNotIn("gerar_musica", names)
 
     def test_life_has_only_documents_and_research(self):
         names = {tool.name for tool in tools_for("vida")}

@@ -1,4 +1,3 @@
-import base64
 from io import BytesIO
 import json
 import logging
@@ -118,7 +117,6 @@ def empacotar_artefactos(
         return _publish(_filename(nome_ficheiro, ".zip", "pacote"), data, "application/zip")
     except (OSError, ValueError, KeyError) as error:
         return _tool_error(error)
-
 
 @tool
 def gerar_documento_word(
@@ -249,58 +247,4 @@ def gerar_video(
             raise RuntimeError("A resposta do modelo não contém os bytes do vídeo.")
         return _publish(_filename(nome_ficheiro, ".mp4", "video"), data, "video/mp4")
     except (OSError, RuntimeError, ValueError) as error:
-        return _tool_error(error)
-
-
-@tool
-def gerar_audio(texto: str, nome_ficheiro: str = "audio", idioma: str = "pt-PT") -> str:
-    try:
-        _require_env("GOOGLE_CLOUD_PROJECT")
-        from google.cloud import texttospeech
-
-        response = texttospeech.TextToSpeechClient().synthesize_speech(
-            input=texttospeech.SynthesisInput(text=_validate_content(texto)),
-            voice=texttospeech.VoiceSelectionParams(
-                language_code=idioma,
-                name="pt-PT-Wavenet-A" if idioma == "pt-PT" else "",
-            ),
-            audio_config=texttospeech.AudioConfig(
-                audio_encoding=texttospeech.AudioEncoding.MP3
-            ),
-        )
-        return _publish(_filename(nome_ficheiro, ".mp3", "audio"), response.audio_content, "audio/mpeg")
-    except (OSError, RuntimeError, ValueError) as error:
-        return _tool_error(error)
-
-
-@tool
-def gerar_musica(
-    prompt: str, nome_ficheiro: str = "musica", duracao_segundos: int = 30
-) -> str:
-    try:
-        max_seconds = min(60, load_runtime_limits().max_media_seconds)
-        if not 1 <= duracao_segundos <= max_seconds:
-            raise ValueError(f"A duração da música deve estar entre 1 e {max_seconds} segundos.")
-        config = _require_env("GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION")
-        import google.auth
-        from google.auth.transport.requests import AuthorizedSession
-
-        credentials, _ = google.auth.default()
-        response = AuthorizedSession(credentials).post(
-            f"https://{config['GOOGLE_CLOUD_LOCATION']}-aiplatform.googleapis.com/v1/"
-            f"projects/{config['GOOGLE_CLOUD_PROJECT']}/locations/{config['GOOGLE_CLOUD_LOCATION']}/"
-            f"publishers/google/models/{os.getenv('VERTEX_MUSIC_MODEL', 'lyria-002')}:predict",
-            json={
-                "instances": [{"prompt": _validate_content(prompt)}],
-                "parameters": {"duration_seconds": duracao_segundos},
-            },
-            timeout=load_runtime_limits().tool_timeout_seconds,
-        )
-        response.raise_for_status()
-        predictions = response.json().get("predictions", [])
-        encoded = predictions[0].get("audioContent") if predictions else None
-        if not encoded:
-            raise RuntimeError("O modelo Lyria não devolveu áudio.")
-        return _publish(_filename(nome_ficheiro, ".wav", "musica"), base64.b64decode(encoded), "audio/wav")
-    except (OSError, RuntimeError, ValueError, IndexError) as error:
         return _tool_error(error)

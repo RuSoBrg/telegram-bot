@@ -1,18 +1,19 @@
 from abc import ABC, abstractmethod
 import os
+from pathlib import Path
 from urllib.parse import quote
 
 
 class ObjectStore(ABC):
-    """Contrato de armazenamento de artefactos sem expor o sistema de ficheiros."""
+    """Contrato de armazenamento local de artefactos."""
 
     @abstractmethod
     def put_bytes(self, key: str, data: bytes) -> str:
-        """Guarda bytes e devolve a URI pública ou identificador do objecto."""
+        """Guarda bytes e devolve o caminho local do objecto."""
 
     @abstractmethod
     def get_url(self, key: str) -> str:
-        """Devolve a URI utilizável para obter o objecto."""
+        """Devolve o identificador local utilizável para obter o objecto."""
 
 
 class InMemoryObjectStore(ObjectStore):
@@ -36,32 +37,32 @@ class InMemoryObjectStore(ObjectStore):
         return self._objects[key]
 
 
-class GCSObjectStore(ObjectStore):
-    def __init__(self, bucket_name: str, prefix: str = ""):
-        if not bucket_name:
-            raise ValueError("GCS_BUCKET é obrigatório para o backend GCS.")
-        from google.cloud import storage
+class LocalObjectStore(ObjectStore):
+    def __init__(self, root: str | Path = "/app/data"):
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
 
-        self.client = storage.Client()
-        self.bucket = self.client.bucket(bucket_name)
-        self.prefix = prefix.strip("/")
-
-    def _blob_name(self, key: str) -> str:
+    def _path(self, key: str) -> Path:
         _validate_key(key)
-        return f"{self.prefix}/{key}" if self.prefix else key
+        path = (self.root / key).resolve()
+        if self.root.resolve() not in path.parents:
+            raise ValueError("object key inválida.")
+        return path
 
     def put_bytes(self, key: str, data: bytes) -> str:
-        blob_name = self._blob_name(key)
-        blob = self.bucket.blob(blob_name)
-        blob.upload_from_string(data)
-        return f"gs://{self.bucket.name}/{blob_name}"
+        path = self._path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return str(path)
 
     def get_url(self, key: str) -> str:
-        blob_name = self._blob_name(key)
-        return f"https://storage.googleapis.com/{self.bucket.name}/{quote(blob_name)}"
+        path = self._path(key)
+        if not path.is_file():
+            raise FileNotFoundError(f"Objecto inexistente: {key}")
+        return str(path)
 
     def get_bytes(self, key: str) -> bytes:
-        return self.bucket.blob(self._blob_name(key)).download_as_bytes()
+        return self._path(key).read_bytes()
 
 
 def _validate_key(key: str) -> None:
@@ -70,14 +71,4 @@ def _validate_key(key: str) -> None:
 
 
 def create_object_store() -> ObjectStore:
-    backend = os.getenv("OBJECT_STORAGE_BACKEND", "memory").lower()
-    if backend == "gcs":
-        return GCSObjectStore(
-            os.getenv("GCS_BUCKET", ""),
-            os.getenv("GCS_PREFIX", ""),
-        )
-    if backend != "memory":
-        raise ValueError(
-            "OBJECT_STORAGE_BACKEND deve ser 'memory' ou 'gcs'; armazenamento local removido."
-        )
-    return InMemoryObjectStore(os.getenv("OBJECT_STORAGE_URL", "memory://artifacts"))
+    return LocalObjectStore(os.getenv("OBJECT_STORAGE_PATH", "/app/data"))

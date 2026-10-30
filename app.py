@@ -1,6 +1,5 @@
 import streamlit as st
 import logging
-import os
 from uuid import uuid4
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
@@ -12,7 +11,7 @@ from domain.events import iter_app_events
 
 logger = logging.getLogger(__name__)
 load_dotenv()
-workflow_store = WorkflowStore(os.getenv("WORKFLOW_DB_PATH", "workspace.db"))
+workflow_store = WorkflowStore()
 
 st.set_page_config(page_title="Workspace AI - Startup", page_icon="🚀", layout="wide")
 

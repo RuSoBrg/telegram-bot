@@ -18,7 +18,6 @@ from domain.research_cache import ResearchCache
 
 logger = logging.getLogger(__name__)
 research_cache = ResearchCache(
-    os.getenv("RESEARCH_CACHE_PATH", "research-cache.db"),
     int(os.getenv("RESEARCH_CACHE_TTL_SECONDS", "3600")),
 )
 MAX_RESULTS = 5

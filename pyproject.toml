@@ -5,14 +5,10 @@ description = "LangGraph workflow for the Workspace AI agents"
 requires-python = ">=3.11"
 dependencies = [
     "langgraph",
-    "langgraph-checkpoint-sqlite",
+    "langgraph-checkpoint-postgres",
     "langchain-core",
     "langchain-google-genai",
-    "langchain-openai",
     "google-genai",
-    "google-auth",
-    "google-cloud-storage",
-    "google-cloud-texttospeech",
     "python-telegram-bot",
     "fastapi",
     "uvicorn[standard]",

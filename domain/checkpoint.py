@@ -1,15 +1,19 @@
-import os
-import sqlite3
-from pathlib import Path
+from contextlib import AbstractContextManager
 
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.postgres import PostgresSaver
+
+from domain.database import database_url
 
 
-def create_checkpoint_saver() -> SqliteSaver:
-    """Cria um checkpointer SQLite durável e mantém a ligação aberta durante o processo."""
-    database_path = Path(os.getenv("CHECKPOINT_DB_PATH", "workspace-checkpoints.db"))
-    database_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(database_path, check_same_thread=False)
-    saver = SqliteSaver(connection)
-    saver.setup()
-    return saver
+_checkpoint_context: AbstractContextManager | None = None
+_checkpoint_saver: PostgresSaver | None = None
+
+
+def create_checkpoint_saver() -> PostgresSaver:
+    """Cria o checkpointer PostgreSQL e mantém a ligação aberta no processo."""
+    global _checkpoint_context, _checkpoint_saver
+    if _checkpoint_saver is None:
+        _checkpoint_context = PostgresSaver.from_conn_string(database_url())
+        _checkpoint_saver = _checkpoint_context.__enter__()
+        _checkpoint_saver.setup()
+    return _checkpoint_saver

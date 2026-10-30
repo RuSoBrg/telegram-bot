@@ -1,4 +1,14 @@
 services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ai_workspace}
+      POSTGRES_USER: ${POSTGRES_USER:-ai_workspace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?configure POSTGRES_PASSWORD}
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
   bot:
     build:
       context: .
@@ -7,11 +17,16 @@ services:
       - .env
     environment:
       PORT: "8000"
+      WORKFLOW_DB_PATH: ${WORKFLOW_DB_PATH:?configure WORKFLOW_DB_PATH}
       TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:?configure TELEGRAM_WEBHOOK_URL}
       TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:?configure TELEGRAM_WEBHOOK_SECRET}
-      OBJECT_STORAGE_BACKEND: ${OBJECT_STORAGE_BACKEND:-gcs}
+      OBJECT_STORAGE_PATH: /app/data
+    volumes:
+      - ./data:/app/data
     expose:
       - "8000"
+    depends_on:
+      - db
     restart: unless-stopped
 
   cloudflared:

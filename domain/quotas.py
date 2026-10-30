@@ -1,7 +1,6 @@
-import sqlite3
 import time
-from contextlib import closing
-from pathlib import Path
+
+from domain.database import connect
 
 
 class QuotaExceededError(RuntimeError):
@@ -11,49 +10,49 @@ class QuotaExceededError(RuntimeError):
 class UserQuotaStore:
     def __init__(
         self,
-        path: str | Path = "workspace.db",
+        _database_url: str | None = None,
         *,
         max_operations: int = 100,
         window_seconds: int = 86400,
     ):
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.max_operations = max_operations
         self.window_seconds = window_seconds
-        with closing(sqlite3.connect(self.path)) as connection:
-            connection.execute(
+        with connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS user_quota_events (
                     user_id TEXT NOT NULL,
                     operation TEXT NOT NULL,
-                    created_at REAL NOT NULL
+                    created_at DOUBLE PRECISION NOT NULL
                 )
                 """
             )
-            connection.commit()
 
     def consume(self, user_id: str, operation: str) -> None:
         if not user_id:
             raise ValueError("É necessário identificar o utilizador para aplicar quotas.")
         cutoff = time.time() - self.window_seconds
-        with closing(sqlite3.connect(self.path)) as connection:
-            with connection:
-                connection.execute(
-                    "DELETE FROM user_quota_events WHERE created_at < ?",
-                    (cutoff,),
+        with connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM user_quota_events WHERE created_at < %s",
+                (cutoff,),
+            )
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM user_quota_events
+                WHERE user_id = %s AND created_at >= %s
+                """,
+                (user_id, cutoff),
+            )
+            if cursor.fetchone()[0] >= self.max_operations:
+                raise QuotaExceededError(
+                    f"Quota diária excedida para o utilizador ({self.max_operations} operações)."
                 )
-                count = connection.execute(
-                    """
-                    SELECT COUNT(*) FROM user_quota_events
-                    WHERE user_id = ? AND created_at >= ?
-                    """,
-                    (user_id, cutoff),
-                ).fetchone()[0]
-                if count >= self.max_operations:
-                    raise QuotaExceededError(
-                        f"Quota diária excedida para o utilizador ({self.max_operations} operações)."
-                    )
-                connection.execute(
-                    "INSERT INTO user_quota_events(user_id, operation, created_at) VALUES (?, ?, ?)",
-                    (user_id, operation, time.time()),
-                )
+            cursor.execute(
+                """
+                INSERT INTO user_quota_events(user_id, operation, created_at)
+                VALUES (%s, %s, %s)
+                """,
+                (user_id, operation, time.time()),
+            )

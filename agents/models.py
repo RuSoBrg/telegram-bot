@@ -3,7 +3,6 @@ from typing import Literal
 
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_openai import AzureChatOpenAI
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
@@ -11,11 +10,9 @@ from tools.code_tools import ler_ficheiro_codigo, listar_ficheiros_projeto
 from tools.file_tools import (
     empacotar_artefactos,
     gerar_apresentacao_powerpoint,
-    gerar_audio,
     gerar_documento_pdf,
     gerar_documento_word,
     gerar_fotografia,
-    gerar_musica,
     gerar_video,
 )
 from tools.training_tools import validar_pacote_formacao
@@ -47,10 +44,6 @@ class QualityDecision(BaseModel):
     verified_sources: list[dict] = Field(default_factory=list)
 
 
-def _tools(*tools: BaseTool) -> list[BaseTool]:
-    return list(tools)
-
-
 def tools_for(agent: str) -> list[BaseTool]:
     common_research = [pesquisar_web]
     if agent == "formador":
@@ -59,7 +52,6 @@ def tools_for(agent: str) -> list[BaseTool]:
             gerar_documento_word,
             gerar_documento_pdf,
             gerar_apresentacao_powerpoint,
-            gerar_audio,
             validar_artefactos,
             validar_pacote_formacao,
             empacotar_artefactos,
@@ -69,7 +61,6 @@ def tools_for(agent: str) -> list[BaseTool]:
             *common_research,
             gerar_fotografia,
             gerar_video,
-            gerar_audio,
             gerar_apresentacao_powerpoint,
             validar_artefactos,
         ]
@@ -128,28 +119,10 @@ def quality_tools() -> list[BaseTool]:
 
 
 def supervisor_model():
-    provider = os.getenv("SUPERVISOR_PROVIDER", "gemini").strip().lower()
-    if provider == "gemini":
-        model = ChatGoogleGenerativeAI(
-            model=os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
-            temperature=0.1,
-            max_retries=1,
-        )
-        return model.with_structured_output(RoutingDecision)
-    if provider != "azure":
-        raise ValueError(
-            "SUPERVISOR_PROVIDER inválido. Usa 'gemini' (predefinido) ou 'azure'."
-        )
-
-    deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "").strip()
-    if not deployment:
-        raise RuntimeError(
-            "SUPERVISOR_PROVIDER=azure requer AZURE_OPENAI_DEPLOYMENT_NAME."
-        )
-    model = AzureChatOpenAI(
-        azure_deployment=deployment,
-        api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-01"),
+    model = ChatGoogleGenerativeAI(
+        model=os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
         temperature=0.1,
+        max_retries=1,
     )
     return model.with_structured_output(RoutingDecision)
 

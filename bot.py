@@ -39,13 +39,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-DEFAULT_DATABASE_PATH = "workspace.db"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-workflow_store = WorkflowStore(os.getenv("WORKFLOW_DB_PATH", DEFAULT_DATABASE_PATH))
-artifact_store = ArtifactVersionStore(os.getenv("ARTIFACT_DB_PATH", DEFAULT_DATABASE_PATH))
+workflow_store = WorkflowStore()
+artifact_store = ArtifactVersionStore()
 runtime_limits = load_runtime_limits()
 quota_store = UserQuotaStore(
-    os.getenv("WORKFLOW_DB_PATH", DEFAULT_DATABASE_PATH),
     max_operations=runtime_limits.max_user_operations,
     window_seconds=runtime_limits.quota_window_seconds,
 )
