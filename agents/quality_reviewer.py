@@ -5,7 +5,11 @@ from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.types import Command, interrupt
 
 from agents.models import quality_models, quality_tools
-from agents.runtime import invoke_with_fallback, load_prompt
+from agents.runtime import (
+    invoke_with_fallback,
+    load_prompt,
+    prepare_messages_for_model,
+)
 from domain.models import ReviewResult
 from domain.quality import build_review_result
 from domain.state import WorkflowState
@@ -101,7 +105,7 @@ def _failure_command(detail: str, iteration: int) -> Command:
                     tool_call_id="quality-error",
                 )
             ],
-            "quality_report": report.model_dump(mode="json"),
+            "quality_report": report,
             "quality_feedback": "",
             "quality_iterations": iteration + 1,
             "status": "failed",
@@ -184,7 +188,9 @@ def create_quality_node(max_iterations: int, target: str = "formador"):
         artifacts, sources = _observations(state.get("messages", []))
         validation = _validation_result(artifacts)
         prompt = _quality_prompt(target, iteration)
-        messages = [SystemMessage(content=prompt)] + state["messages"]
+        messages = [SystemMessage(content=prompt)] + prepare_messages_for_model(
+            list(state["messages"])
+        )
         try:
             research_response = invoke_with_fallback(research, research_fallback, messages)
             if research_response.tool_calls:
@@ -203,7 +209,7 @@ def create_quality_node(max_iterations: int, target: str = "formador"):
             return _failure_command(detail, iteration)
         report, feedback = _review_report(reviewer_decisions, validation)
         result = {
-            "quality_report": report.model_dump(mode="json"),
+            "quality_report": report,
             "quality_iterations": iteration + 1,
             "iteration": iteration + 1,
             "research_sources": sources,

@@ -4,7 +4,12 @@ from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.types import Command
 
 from agents.models import specialist_models
-from agents.runtime import content_to_text, invoke_with_fallback, load_prompt
+from agents.runtime import (
+    content_to_text,
+    invoke_with_fallback,
+    load_prompt,
+    prepare_messages_for_model,
+)
 from domain.observability import timed_event
 from domain.state import WorkflowState
 
@@ -36,6 +41,9 @@ def create_specialist_node(
             prompt += f"\n\nFeedback da revisão a corrigir:\n{feedback}"
 
         try:
+            conversation = prepare_messages_for_model(
+                list(state.get("messages", []))
+            )
             with timed_event(
                 "agent_invocation",
                 request_id=state.get("request_id", ""),
@@ -45,7 +53,7 @@ def create_specialist_node(
                 response = invoke_with_fallback(
                     primary,
                     fallback,
-                    [SystemMessage(content=prompt)] + state.get("messages", []),
+                    [SystemMessage(content=prompt)] + conversation,
                 )
         except Exception as error:
             detail = f"{type(error).__name__}: {error}"

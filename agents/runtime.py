@@ -2,6 +2,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from langchain_core.messages import AIMessage, HumanMessage
+
 logger = logging.getLogger(__name__)
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
@@ -32,6 +34,20 @@ def content_to_text(content: Any) -> str:
     if isinstance(content, (list, tuple)):
         return "".join(content_to_text(item) for item in content)
     return str(content)
+
+
+def prepare_messages_for_model(messages: list[Any]) -> list[Any]:
+    """Ensure a model request starts a new user turn after an AI response."""
+    prepared = list(messages)
+    if not prepared or not isinstance(prepared[-1], AIMessage):
+        return prepared
+    if prepared[-1].tool_calls:
+        raise ValueError(
+            "Não é possível invocar o modelo enquanto existem chamadas de ferramenta "
+            "sem os respetivos ToolMessages."
+        )
+    prepared.append(HumanMessage(content="Prossegue com o próximo passo da análise."))
+    return prepared
 
 
 def _is_api_transient_error(error: Exception) -> bool:
