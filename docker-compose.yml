@@ -13,15 +13,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    command: ["python", "bot.py"]
     env_file:
       - .env
     environment:
       PORT: "8000"
-      HOST: "0.0.0.0"
       WORKFLOW_DB_PATH: ${WORKFLOW_DB_PATH:?configure WORKFLOW_DB_PATH}
-      TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
+      TELEGRAM_WEBHOOK_BASE_URL: ${TELEGRAM_WEBHOOK_BASE_URL:?configure TELEGRAM_WEBHOOK_BASE_URL}
       TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
-      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
       OBJECT_STORAGE_PATH: /app/data
     volumes:
       - ./data:/app/data
@@ -30,6 +29,16 @@ services:
     depends_on:
       - db
     restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   ngrok:
     image: ngrok/ngrok:latest
@@ -37,8 +46,9 @@ services:
     command:
       - "http"
       - "bot:8000"
-      - "--domain=chalice-rewrap-sequester.ngrok-free.dev"
+      - "--domain=${NGROK_DOMAIN:?configure NGROK_DOMAIN}"
     environment:
-      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN:?configure NGROK_AUTHTOKEN}
     depends_on:
-      - bot
+      bot:
+        condition: service_healthy

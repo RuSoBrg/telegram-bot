@@ -320,7 +320,7 @@ def _build_application() -> Application:
 
 
 telegram_application = _build_application() if TELEGRAM_TOKEN else None
-WEBHOOK_PATH = os.getenv("TELEGRAM_WEBHOOK_PATH", "/telegram/webhook")
+WEBHOOK_PATH = "/telegram/webhook"
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 
 
@@ -330,12 +330,9 @@ async def _lifespan(_: FastAPI):
         raise RuntimeError("TELEGRAM_TOKEN não configurado.")
     await telegram_application.initialize()
     await telegram_application.start()
-    raw_webhook_url = os.getenv("TELEGRAM_WEBHOOK_URL", "").strip().rstrip("/")
-    if raw_webhook_url:
-        if raw_webhook_url.endswith(WEBHOOK_PATH):
-            webhook_url = raw_webhook_url
-        else:
-            webhook_url = f"{raw_webhook_url}{WEBHOOK_PATH}"
+    base_url = os.getenv("TELEGRAM_WEBHOOK_BASE_URL", "").strip().rstrip("/")
+    if base_url:
+        webhook_url = f"{base_url}{WEBHOOK_PATH}"
         logger.info("A configurar Webhook do Telegram em: %s", webhook_url)
         await telegram_application.bot.set_webhook(
             url=webhook_url,
