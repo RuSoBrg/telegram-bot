@@ -1,6 +1,9 @@
 import os
+import logging
 from pathlib import Path
 from langchain_core.tools import tool
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 _configured_roots = os.environ.get("AGENT_ALLOWED_ROOTS", "")
@@ -52,6 +55,9 @@ def ler_ficheiro_codigo(caminho_ficheiro: str) -> str:
         return "Erro: o acesso a este caminho não é permitido."
     except OSError:
         return "Erro: não foi possível ler o ficheiro indicado."
+    except Exception as error:
+        logger.exception("Erro inesperado em ler_ficheiro_codigo")
+        return f"Tool execution failed: {error}"
 
 @tool
 def listar_ficheiros_projeto(caminho_pasta: str = ".") -> str:
@@ -84,3 +90,6 @@ def listar_ficheiros_projeto(caminho_pasta: str = ".") -> str:
         return "Erro: o acesso a esta pasta não é permitido."
     except OSError:
         return "Erro: não foi possível listar a pasta indicada."
+    except Exception as error:
+        logger.exception("Erro inesperado em listar_ficheiros_projeto")
+        return f"Tool execution failed: {error}"

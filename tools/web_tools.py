@@ -5,14 +5,6 @@ from urllib.parse import urlparse
 from typing import Any
 
 from langchain_core.tools import tool
-from tavily.errors import (
-    BadRequestError,
-    ForbiddenError,
-    InvalidAPIKeyError,
-    MissingAPIKeyError,
-    TimeoutError as TavilyTimeoutError,
-    UsageLimitExceededError,
-)
 from domain.research_cache import ResearchCache
 
 
@@ -105,19 +97,9 @@ def pesquisar_web(
         if os.getenv("RESEARCH_CACHE_ENABLED", "true").lower() == "true":
             research_cache.put(cache_key, payload)
         return json.dumps(payload, ensure_ascii=False)
-    except (
-        OSError,
-        RuntimeError,
-        ValueError,
-        BadRequestError,
-        ForbiddenError,
-        InvalidAPIKeyError,
-        MissingAPIKeyError,
-        TavilyTimeoutError,
-        UsageLimitExceededError,
-    ) as error:
+    except Exception as error:
         logger.exception("Falha na pesquisa Tavily")
         return json.dumps(
-            {"consulta": consulta, "erro": str(error)},
+            {"consulta": consulta, "erro": f"Tool execution failed: {error}"},
             ensure_ascii=False,
         )

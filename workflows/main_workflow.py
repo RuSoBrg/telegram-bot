@@ -1,3 +1,4 @@
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import START, StateGraph
 from langgraph.prebuilt import ToolNode
 
@@ -5,7 +6,7 @@ from agents.models import tools_for
 from agents.quality_reviewer import create_quality_node
 from agents.specialists import create_specialist_node
 from agents.supervisor import create_supervisor_node
-from domain.checkpoint import create_checkpoint_saver
+from domain.checkpoint import create_checkpoint_saver, get_checkpoint_saver
 from domain.limits import load_runtime_limits
 from domain.models import WorkflowStatus
 from domain.quotas import UserQuotaStore
@@ -16,7 +17,7 @@ from workflows.training_workflow import build_training_workflow
 AGENTS = ("marketing", "engenharia", "vida", "formador")
 
 
-def build_workflow():
+def build_workflow(checkpointer: BaseCheckpointSaver | None = None):
     builder = StateGraph(WorkflowState)
     builder.add_node("enforce_quota", _enforce_quota)
     builder.add_node(
@@ -27,10 +28,20 @@ def build_workflow():
             "engenharia",
             "vida",
             "training_workflow",
+            "quality_reviewer",
             "__end__",
         ),
     )
     builder.add_node("training_workflow", build_training_workflow())
+
+    quality_limits = load_runtime_limits().max_quality_iterations
+
+    # Gatekeeper de qualidade para respostas antes do __end__
+    builder.add_node(
+        "quality_reviewer",
+        create_quality_node(quality_limits, target="supervisor"),
+        destinations=("supervisor", "__end__"),
+    )
 
     for agent in AGENTS:
         if agent != "formador":
@@ -59,7 +70,7 @@ def build_workflow():
             builder.add_node(
                 f"qualidade_{agent}",
                 create_quality_node(
-                    load_runtime_limits().max_quality_iterations,
+                    quality_limits,
                     target=agent,
                 ),
                 destinations=(agent, "__end__"),
@@ -67,8 +78,10 @@ def build_workflow():
 
     builder.add_edge(START, "enforce_quota")
     builder.add_edge("enforce_quota", "supervisor")
+
+    saver = checkpointer or get_checkpoint_saver(fallback_to_memory=True)
     return builder.compile(
-        checkpointer=create_checkpoint_saver(),
+        checkpointer=saver,
         interrupt_before=["tools_engenharia"],
     )
 
@@ -76,7 +89,10 @@ def build_workflow():
 def _run_tools(node: ToolNode, state: WorkflowState, target: str):
     from langgraph.types import Command
 
-    return Command(goto=target, update=node.invoke(state))
+    steps = state.get("steps", 0)
+    update_data = node.invoke(state)
+    update_data["steps"] = steps + 1
+    return Command(goto=target, update=update_data)
 
 
 def _request_engineering_approval(state: WorkflowState):
@@ -89,7 +105,7 @@ def _request_engineering_approval(state: WorkflowState):
 
 def _enforce_quota(state: WorkflowState) -> dict[str, str]:
     """Consume one workflow quota unit before any model or tool invocation."""
-    user_id = state.get("user_id", "")
+    user_id = state.get("user_id") or "default_user"
     UserQuotaStore().consume(user_id, "workflow")
     return {"status": "producing"}
 

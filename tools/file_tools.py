@@ -64,7 +64,7 @@ def _publish(filename: str, data: bytes, mime_type: str) -> str:
 
 def _tool_error(error: Exception) -> str:
     logger.exception("Falha ao gerar ficheiro")
-    return json.dumps({"tipo": "erro_ficheiro", "erro": str(error)}, ensure_ascii=False)
+    return json.dumps({"tipo": "erro_ficheiro", "erro": f"Tool execution failed: {error}"}, ensure_ascii=False)
 
 
 def _require_env(*names: str) -> dict[str, str]:
@@ -116,7 +116,7 @@ def empacotar_artefactos(
                 bundle.writestr(key.rsplit("/", 1)[-1], _read_key(key))
         data = output.getvalue()
         return _publish(_filename(nome_ficheiro, ".zip", "pacote"), data, "application/zip")
-    except (OSError, ValueError, KeyError) as error:
+    except Exception as error:
         return _tool_error(error)
 
 @tool
@@ -147,7 +147,7 @@ def gerar_documento_word(
             output.getvalue(),
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
-    except (OSError, ValueError) as error:
+    except Exception as error:
         return _tool_error(error)
 
 
@@ -181,7 +181,7 @@ def gerar_documento_excel(
             output.getvalue(),
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-    except (OSError, ValueError, TypeError) as error:
+    except Exception as error:
         return _tool_error(error)
 
 
@@ -213,7 +213,7 @@ def gerar_apresentacao_powerpoint(
             output.getvalue(),
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         )
-    except (OSError, ValueError) as error:
+    except Exception as error:
         return _tool_error(error)
 
 
@@ -236,7 +236,7 @@ def gerar_documento_pdf(
         output = BytesIO()
         SimpleDocTemplate(output, pagesize=A4).build(story)
         return _publish(_filename(nome_ficheiro, ".pdf", "documento"), output.getvalue(), "application/pdf")
-    except (OSError, ValueError) as error:
+    except Exception as error:
         return _tool_error(error)
 
 
@@ -250,7 +250,7 @@ def gerar_fotografia(prompt: str, nome_ficheiro: str = "imagem", modelo: str = "
             config={"response_modalities": ["TEXT", "IMAGE"]},
         )
         return _publish(_filename(nome_ficheiro, ".png", "imagem"), _inline_bytes(response), "image/png")
-    except (OSError, RuntimeError, ValueError) as error:
+    except Exception as error:
         return _tool_error(error)
 
 
@@ -286,5 +286,5 @@ def gerar_video(
         if not data:
             raise RuntimeError("A resposta do modelo não contém os bytes do vídeo.")
         return _publish(_filename(nome_ficheiro, ".mp4", "video"), data, "video/mp4")
-    except (OSError, RuntimeError, ValueError) as error:
+    except Exception as error:
         return _tool_error(error)

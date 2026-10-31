@@ -37,8 +37,11 @@ def validar_artefactos(paths: list[str]) -> str:
         suffix = PurePosixPath(name).suffix.lower()
         try:
             data = reader(key)
-        except (FileNotFoundError, KeyError, ValueError):
+        except (FileNotFoundError, KeyError):
             errors.append(f"Ficheiro inexistente: {name}")
+            continue
+        except Exception as error:
+            errors.append(f"Tool execution failed for {name}: {error}")
             continue
         if suffix not in allowed:
             errors.append(f"Extensão não suportada: {name}")

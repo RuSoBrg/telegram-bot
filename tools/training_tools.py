@@ -18,6 +18,11 @@ def validar_pacote_formacao(pacote_json: str) -> str:
             {"valid": False, "errors": json.loads(error.json())},
             ensure_ascii=False,
         )
+    except Exception as error:
+        return json.dumps(
+            {"valid": False, "erro": f"Tool execution failed: {error}"},
+            ensure_ascii=False,
+        )
     return json.dumps(
         {
             "valid": True,

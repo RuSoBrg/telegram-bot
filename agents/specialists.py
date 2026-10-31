@@ -10,6 +10,7 @@ from agents.runtime import (
     load_prompt,
     prepare_messages_for_model,
 )
+from domain.limits import load_runtime_limits
 from domain.observability import timed_event
 from domain.state import WorkflowState
 
@@ -30,8 +31,26 @@ def create_specialist_node(
     """Create a specialist node with its dynamic role prompt and fallback model."""
     primary, fallback = specialist_models(agent_name)
     label = AGENT_LABELS.get(agent_name, f"[{agent_name} / Gemini]")
+    max_steps = load_runtime_limits().max_steps
 
     def specialist_node(state: WorkflowState):
+        steps = state.get("steps", 0)
+        if steps >= max_steps:
+            return Command(
+                goto="__end__",
+                update={
+                    "steps": steps,
+                    "status": "failed",
+                    "errors": [
+                        f"O workflow excedeu o limite de {max_steps} passos."
+                    ],
+                    "messages": [
+                        AIMessage(
+                            content=f"❌ O workflow excedeu o limite de {max_steps} passos."
+                        )
+                    ],
+                },
+            )
         prompt = load_prompt(f"{agent_name}.md")
         instruction = state.get("instruction", "")
         feedback = state.get("quality_feedback", "")
@@ -67,13 +86,18 @@ def create_specialist_node(
                     ],
                     "errors": [f"Falha no agente {agent_name}: {detail}"],
                     "status": "failed",
+                    "steps": steps + 1,
                 },
             )
 
         if response.tool_calls:
             return Command(
                 goto=tools_node_name,
-                update={"messages": [response], "status": "producing"},
+                update={
+                    "messages": [response],
+                    "status": "producing",
+                    "steps": steps + 1,
+                },
             )
         return Command(
             goto=quality_node_name,
@@ -82,6 +106,7 @@ def create_specialist_node(
                     AIMessage(content=f"{label}:\n{content_to_text(response.content)}")
                 ],
                 "status": "reviewing",
+                "steps": steps + 1,
             },
         )
 

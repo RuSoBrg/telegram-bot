@@ -3,7 +3,7 @@ import unittest
 
 import psycopg
 
-from domain.checkpoint import create_checkpoint_saver
+from domain.checkpoint import create_checkpoint_saver, get_checkpoint_saver
 
 
 class CheckpointTests(unittest.TestCase):
@@ -17,6 +17,10 @@ class CheckpointTests(unittest.TestCase):
         except psycopg.OperationalError as error:
             self.skipTest(f"PostgreSQL de teste indisponível: {error}")
         self.assertEqual(saver.__class__.__name__, "PostgresSaver")
+
+    def test_checkpoint_fallback_to_memory(self):
+        saver = get_checkpoint_saver(fallback_to_memory=True)
+        self.assertIsNotNone(saver)
 
 
 if __name__ == "__main__":

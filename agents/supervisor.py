@@ -35,7 +35,7 @@ def create_supervisor_node():
         decision = model.invoke(messages)
         destination = {
             "formador": "training_workflow",
-            "finalizar": "__end__",
+            "finalizar": "quality_reviewer",
         }.get(decision.destino, decision.destino)
         return Command(
             goto=destination,

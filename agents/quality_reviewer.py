@@ -25,12 +25,14 @@ QUALITY_PROMPTS = {
     "engenharia": "qualidade_tecnica.md",
     "marketing": EDITORIAL_QUALITY_PROMPT,
     "vida": EDITORIAL_QUALITY_PROMPT,
+    "supervisor": EDITORIAL_QUALITY_PROMPT,
 }
 REVIEWER_ROLES = {
     "formador": ("pedagogical", "qualidade_formador.md"),
     "engenharia": ("technical", "qualidade_tecnica.md"),
     "marketing": ("editorial", EDITORIAL_QUALITY_PROMPT),
     "vida": ("operational", EDITORIAL_QUALITY_PROMPT),
+    "supervisor": ("editorial", EDITORIAL_QUALITY_PROMPT),
 }
 
 
@@ -63,7 +65,7 @@ def _validation_result(artifacts):
 
 def _reviewer_specs(target: str):
     specs = [REVIEWER_ROLES.get(target, ("general", BASE_QUALITY_PROMPT))]
-    if target in {"formador", "engenharia", "marketing", "vida"}:
+    if target in {"formador", "engenharia", "marketing", "vida", "supervisor"}:
         specs.append(("factual", "qualidade_factual.md"))
     return specs
 

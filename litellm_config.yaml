@@ -1,6 +1,8 @@
-# LiteLLM Proxy routing aliases. Applications should request one of these
-# logical names instead of coupling an agent to a provider model.
+# LiteLLM Proxy routing aliases and fallback rules
+# Logical model names decouple application agents from provider endpoints.
+
 model_list:
+  # Supervisor: Primary GPT-4o, Secondary Claude 3.5 Haiku
   - model_name: supervisor-model
     litellm_params:
       model: azure/${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}
@@ -13,17 +15,25 @@ model_list:
       model: anthropic/claude-3-5-haiku-latest
       api_key: os.environ/ANTHROPIC_API_KEY
 
+  # Programmer Agent: Primary Claude 3.5 Sonnet
   - model_name: programmer-model
     litellm_params:
       model: anthropic/claude-3-5-sonnet-latest
       api_key: os.environ/ANTHROPIC_API_KEY
 
+  # Large Files / Extended Context: Gemini 1.5 Pro (2M token window)
   - model_name: file-reader-model
     litellm_params:
       model: gemini/gemini-1.5-pro
       api_key: os.environ/GEMINI_API_KEY
 
+  # Marketing Agent: Flash and GPT-4o
   - model_name: marketing-model
+    litellm_params:
+      model: gemini/gemini-1.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+  - model_name: marketing-gpt4o
     litellm_params:
       model: azure/${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}
       api_key: os.environ/AZURE_OPENAI_API_KEY
@@ -36,24 +46,37 @@ model_list:
       api_key: os.environ/GEMINI_API_KEY
 
 router_settings:
-  routing_strategy: simple-shuffle
-  num_retries: 2
+  routing_strategy: latency-based-routing
+  num_retries: 3
   retry_after: 1
+  timeout: 60
   allowed_fails: 2
   cooldown_time: 30
   fallbacks:
     - supervisor-model:
         - supervisor-haiku
         - programmer-model
-        - file-reader-model
     - programmer-model:
+        - supervisor-model
         - file-reader-model
     - file-reader-model:
+        - programmer-model
         - marketing-flash
     - marketing-model:
+        - marketing-gpt4o
         - marketing-flash
+    - marketing-flash:
+        - marketing-gpt4o
+  context_window_fallbacks:
+    - programmer-model:
+        - file-reader-model
+    - supervisor-model:
+        - file-reader-model
+    - marketing-model:
+        - file-reader-model
   retry_policy:
-    RateLimitErrorRetries: 2
+    RateLimitErrorRetries: 3
+    TimeoutErrorRetries: 2
     InternalServerErrorRetries: 2
 
 general_settings:
