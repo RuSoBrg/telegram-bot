@@ -1,0 +1,44 @@
+# Configuração do LiteLLM Proxy. O cliente LangChain usa apenas o nome
+# "supervisor-model"; o proxy escolhe o fornecedor e aplica os fallbacks.
+model_list:
+  - model_name: supervisor-model
+    litellm_params:
+      model: groq/llama-3.1-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: gemini-fallback
+    litellm_params:
+      model: gemini/gemini-1.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+  - model_name: azure-gpt-4o
+    litellm_params:
+      model: azure/${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}
+      api_key: os.environ/AZURE_OPENAI_API_KEY
+      api_base: os.environ/AZURE_OPENAI_ENDPOINT
+      api_version: os.environ/AZURE_OPENAI_API_VERSION
+
+  - model_name: openrouter-fallback
+    litellm_params:
+      model: openrouter/${OPENROUTER_MODEL:-google/gemini-2.0-flash-exp:free}
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 2
+  retry_after: 1
+  allowed_fails: 2
+  cooldown_time: 30
+  fallbacks:
+    - supervisor-model:
+        - gemini-fallback
+        - azure-gpt-4o
+        - openrouter-fallback
+  retry_policy:
+    RateLimitErrorRetries: 2
+    InternalServerErrorRetries: 2
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  set_verbose: false

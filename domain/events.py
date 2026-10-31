@@ -36,7 +36,8 @@ def _state_events(state: dict[str, Any]) -> list[AppEvent]:
         )
     messages = state.get("messages") or []
     if not messages:
-        result.append(AppEvent("status", state.get("status", "updated"), {"state": state}))
+        if "__interrupt__" not in state:
+            result.append(AppEvent("status", state.get("status", "updated"), {"state": state}))
         return result
     message = messages[-1]
     if isinstance(message, AIMessage) and message.content:

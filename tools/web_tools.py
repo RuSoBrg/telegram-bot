@@ -18,7 +18,7 @@ from domain.research_cache import ResearchCache
 
 logger = logging.getLogger(__name__)
 research_cache = ResearchCache(
-    int(os.getenv("RESEARCH_CACHE_TTL_SECONDS", "3600")),
+    ttl_seconds=int(os.getenv("RESEARCH_CACHE_TTL_SECONDS", "3600")),
 )
 MAX_RESULTS = 5
 MAX_CONTENT_PER_RESULT = 3000
