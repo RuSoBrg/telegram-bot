@@ -186,7 +186,7 @@ def _track_task(task: asyncio.Task) -> None:
 def _stream_graph(input_value, chat_id: str):
     return grafo.stream(
         input_value,
-        config={"configurable": {"thread_id": chat_id}},
+        config={"configurable": {"thread_id": chat_id}, "recursion_limit": 5},
         stream_mode="values",
     )
 

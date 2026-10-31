@@ -64,7 +64,13 @@ def _publish(filename: str, data: bytes, mime_type: str) -> str:
 
 def _tool_error(error: Exception) -> str:
     logger.exception("Falha ao gerar ficheiro")
-    return json.dumps({"tipo": "erro_ficheiro", "erro": f"Tool execution failed: {error}"}, ensure_ascii=False)
+    return json.dumps(
+        {
+            "tipo": "erro_ficheiro",
+            "erro": f"Error executing tool: {str(error)}. Please adjust your parameters and try again.",
+        },
+        ensure_ascii=False,
+    )
 
 
 def _require_env(*names: str) -> dict[str, str]:

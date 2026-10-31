@@ -97,9 +97,9 @@ def pesquisar_web(
         if os.getenv("RESEARCH_CACHE_ENABLED", "true").lower() == "true":
             research_cache.put(cache_key, payload)
         return json.dumps(payload, ensure_ascii=False)
-    except Exception as error:
+    except Exception as e:
         logger.exception("Falha na pesquisa Tavily")
         return json.dumps(
-            {"consulta": consulta, "erro": f"Tool execution failed: {error}"},
+            {"consulta": consulta, "erro": f"Error executing tool: {str(e)}. Please adjust your parameters and try again."},
             ensure_ascii=False,
         )

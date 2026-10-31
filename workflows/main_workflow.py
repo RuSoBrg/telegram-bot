@@ -6,7 +6,11 @@ from agents.models import tools_for
 from agents.quality_reviewer import create_quality_node
 from agents.specialists import create_specialist_node
 from agents.supervisor import create_supervisor_node
-from domain.checkpoint import create_checkpoint_saver, get_checkpoint_saver
+from domain.checkpoint import (
+    create_async_checkpoint_saver,
+    create_checkpoint_saver,
+    get_checkpoint_saver,
+)
 from domain.limits import load_runtime_limits
 from domain.models import WorkflowStatus
 from domain.quotas import UserQuotaStore
@@ -84,6 +88,12 @@ def build_workflow(checkpointer: BaseCheckpointSaver | None = None):
         checkpointer=saver,
         interrupt_before=["tools_engenharia"],
     )
+
+
+async def build_async_workflow(checkpointer: BaseCheckpointSaver | None = None):
+    """Compila o grafo assíncrono com AsyncPostgresSaver para máxima resiliência."""
+    saver = checkpointer or await create_async_checkpoint_saver()
+    return build_workflow(checkpointer=saver)
 
 
 def _run_tools(node: ToolNode, state: WorkflowState, target: str):

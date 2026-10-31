@@ -2,7 +2,7 @@
 # Logical model names decouple application agents from provider endpoints.
 
 model_list:
-  # Supervisor: Primary GPT-4o, Secondary Claude 3.5 Haiku
+  # Supervisor: Primary GPT-4o, Secondary Claude 3 Haiku
   - model_name: supervisor-model
     litellm_params:
       model: azure/${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}
@@ -12,13 +12,13 @@ model_list:
 
   - model_name: supervisor-haiku
     litellm_params:
-      model: anthropic/claude-3-5-haiku-latest
+      model: anthropic/claude-3-haiku-20240307
       api_key: os.environ/ANTHROPIC_API_KEY
 
-  # Programmer Agent: Primary Claude 3.5 Sonnet
+  # Programmer Agent: Claude 3.5 Sonnet (20240620)
   - model_name: programmer-model
     litellm_params:
-      model: anthropic/claude-3-5-sonnet-latest
+      model: anthropic/claude-3-5-sonnet-20240620
       api_key: os.environ/ANTHROPIC_API_KEY
 
   # Large Files / Extended Context: Gemini 1.5 Pro (2M token window)
@@ -53,9 +53,10 @@ router_settings:
   allowed_fails: 2
   cooldown_time: 30
   fallbacks:
+    # Se GPT-4o der RateLimit ou falhar, salta para Claude 3.5 Sonnet e depois Haiku
     - supervisor-model:
-        - supervisor-haiku
         - programmer-model
+        - supervisor-haiku
     - programmer-model:
         - supervisor-model
         - file-reader-model

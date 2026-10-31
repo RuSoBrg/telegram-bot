@@ -53,11 +53,9 @@ def ler_ficheiro_codigo(caminho_ficheiro: str) -> str:
         return f"--- Conteúdo de {caminho_ficheiro} ---\n{conteudo}"
     except PermissionError:
         return "Erro: o acesso a este caminho não é permitido."
-    except OSError:
-        return "Erro: não foi possível ler o ficheiro indicado."
-    except Exception as error:
-        logger.exception("Erro inesperado em ler_ficheiro_codigo")
-        return f"Tool execution failed: {error}"
+    except Exception as e:
+        logger.exception("Erro inesperado em ler_ficheiro_codigo: %s", e)
+        return f"Error executing tool: {str(e)}. Please adjust your parameters and try again."
 
 @tool
 def listar_ficheiros_projeto(caminho_pasta: str = ".") -> str:
@@ -88,8 +86,6 @@ def listar_ficheiros_projeto(caminho_pasta: str = ".") -> str:
         return "Ficheiros encontrados no projeto:\n" + "\n".join(ficheiros[:50]) # Limita a 50 ficheiros
     except (PermissionError, NotADirectoryError):
         return "Erro: o acesso a esta pasta não é permitido."
-    except OSError:
-        return "Erro: não foi possível listar a pasta indicada."
-    except Exception as error:
-        logger.exception("Erro inesperado em listar_ficheiros_projeto")
-        return f"Tool execution failed: {error}"
+    except Exception as e:
+        logger.exception("Erro inesperado em listar_ficheiros_projeto: %s", e)
+        return f"Error executing tool: {str(e)}. Please adjust your parameters and try again."

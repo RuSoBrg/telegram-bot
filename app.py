@@ -30,7 +30,10 @@ if "request_id" not in st.session_state:
 if "approval_required" not in st.session_state:
     st.session_state.approval_required = False
 
-config = {"configurable": {"thread_id": st.session_state.thread_id}}
+config = {
+    "configurable": {"thread_id": st.session_state.thread_id},
+    "recursion_limit": 5,
+}
 
 # Mostrar mensagens anteriores na UI
 for message in st.session_state.messages:
