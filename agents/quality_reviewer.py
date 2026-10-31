@@ -53,7 +53,11 @@ def _observations(messages):
 def _validation_result(artifacts):
     if not artifacts:
         return {}
-    paths = [item.get("key", item["uri"]) for item in artifacts if item.get("uri")]
+    paths = [
+        item.get("key") or item.get("uri")
+        for item in artifacts
+        if item.get("key") or item.get("uri")
+    ]
     return json.loads(validar_artefactos.invoke({"paths": paths}))
 
 
@@ -197,8 +201,15 @@ def create_quality_node(max_iterations: int, target: str = "formador"):
                 messages.append(research_response)
                 for call in research_response.tool_calls:
                     tool = next(
-                        candidate for candidate in quality_tools() if candidate.name == call["name"]
+                        (
+                            candidate
+                            for candidate in quality_tools()
+                            if candidate.name == call["name"]
+                        ),
+                        None,
                     )
+                    if tool is None:
+                        raise ValueError(f"Ferramenta de qualidade não permitida: {call['name']}")
                     result = tool.invoke(call["args"])
                     messages.append(ToolMessage(content=result, tool_call_id=call["id"]))
             reviewer_decisions = _run_reviewers(

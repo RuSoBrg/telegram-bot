@@ -25,3 +25,4 @@ class WorkflowState(TypedDict, total=False):
     instruction: str
     quality_feedback: str
     quality_iterations: int
+    steps: int
