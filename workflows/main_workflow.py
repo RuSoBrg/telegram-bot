@@ -23,6 +23,7 @@ from workflows.training_workflow import build_training_workflow
 
 AGENTS = ("marketing", "engenharia", "vida", "formador")
 MAX_GRAPH_STEPS = 5
+GRAPH_RECURSION_LIMIT = 5
 
 
 def build_workflow(
@@ -79,7 +80,7 @@ def build_workflow(
                 lambda state, node=tool_node, target=agent: _run_tools(
                     node, state, target
                 ),
-                destinations=(agent,),
+                destinations=(agent, f"qualidade_{agent}", "quality_reviewer"),
             )
             builder.add_node(
                 f"qualidade_{agent}",
@@ -114,7 +115,7 @@ def _run_tools(node: ToolNode, state: WorkflowState, target: str) -> Any:
     steps = state.get("steps", 0)
     if steps >= MAX_GRAPH_STEPS:
         return Command(
-            goto="__end__",
+            goto="quality_reviewer",
             update={
                 "steps": steps,
                 "status": "failed",
@@ -127,7 +128,7 @@ def _run_tools(node: ToolNode, state: WorkflowState, target: str) -> Any:
         update_data = node.invoke(state)
     except Exception as error:
         return Command(
-            goto="__end__",
+            goto="quality_reviewer",
             update={
                 "steps": steps + 1,
                 "status": "failed",

@@ -29,6 +29,7 @@ from domain.observability import log_event, timed_event
 from domain.persistence import WorkflowStore
 from agents.runtime import PLAFOND_EXAUSTO_MESSAGE
 from graph import grafo
+from workflows.main_workflow import GRAPH_RECURSION_LIMIT
 from tools.file_tools import store as object_store
 
 logging.basicConfig(
@@ -185,7 +186,10 @@ def _track_task(task: asyncio.Task) -> None:
 def _stream_graph(input_value, chat_id: str):
     return grafo.stream(
         input_value,
-        config={"configurable": {"thread_id": chat_id}, "recursion_limit": 5},
+        config={
+            "configurable": {"thread_id": chat_id},
+            "recursion_limit": GRAPH_RECURSION_LIMIT,
+        },
         stream_mode="values",
     )
 

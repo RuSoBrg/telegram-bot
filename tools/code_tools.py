@@ -1,9 +1,7 @@
 import os
-import logging
 from pathlib import Path
 from langchain_core.tools import tool
-
-logger = logging.getLogger(__name__)
+from tools.safe_execution import safe_tool_execution
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 _configured_roots = os.environ.get("AGENT_ALLOWED_ROOTS", "")
@@ -34,58 +32,48 @@ def _resolve_allowed_path(path_value: str, *, must_be_directory: bool = False) -
     return resolved
 
 @tool
+@safe_tool_execution
 def ler_ficheiro_codigo(caminho_ficheiro: str) -> str:
     """Lê o conteúdo completo de um ficheiro de código no disco (ex: Flutter/Dart, C#, YAML, JSON).
     Deves passar o caminho relativo ou absoluto do ficheiro."""
-    try:
-        caminho = _resolve_allowed_path(caminho_ficheiro)
-        if not caminho.is_file():
-            return f"Erro: O ficheiro '{caminho_ficheiro}' não foi encontrado no disco."
-        
-        # Limite de segurança para evitar ler ficheiros gigantescos ou binários
-        tamanho = caminho.stat().st_size
-        if tamanho > 500_000: # ~500KB
-            return f"Erro: O ficheiro é demasiado grande ({tamanho} bytes) para ser lido de uma só vez."
+    caminho = _resolve_allowed_path(caminho_ficheiro)
+    if not caminho.is_file():
+        return f"Erro: O ficheiro '{caminho_ficheiro}' não foi encontrado no disco."
 
-        with caminho.open("r", encoding="utf-8", errors="ignore") as f:
-            conteudo = f.read()
-            
-        return f"--- Conteúdo de {caminho_ficheiro} ---\n{conteudo}"
-    except PermissionError:
-        return "Erro: o acesso a este caminho não é permitido."
-    except Exception as e:
-        logger.exception("Erro inesperado em ler_ficheiro_codigo: %s", e)
-        return f"Error executing tool: {str(e)}. Please adjust your parameters and try again."
+    tamanho = caminho.stat().st_size
+    if tamanho > 500_000:
+        return f"Erro: O ficheiro é demasiado grande ({tamanho} bytes) para ser lido de uma só vez."
+
+    with caminho.open("r", encoding="utf-8", errors="ignore") as f:
+        conteudo = f.read()
+
+    return f"--- Conteúdo de {caminho_ficheiro} ---\n{conteudo}"
 
 @tool
+@safe_tool_execution
 def listar_ficheiros_projeto(caminho_pasta: str = ".") -> str:
     """Lista todos os ficheiros de código (.dart, .yaml, .json, .gradle) dentro de uma pasta do projeto.
     Útil para explorar a estrutura do projeto antes de ler um ficheiro específico."""
-    try:
-        caminho_raiz = _resolve_allowed_path(caminho_pasta, must_be_directory=True)
-        if not caminho_raiz.exists():
-            return f"Erro: A pasta '{caminho_pasta}' não existe."
-        
-        ficheiros = []
-        extensoes_permitidas = ('.dart', '.yaml', '.json', '.gradle', '.xml', '.properties')
-        
-        for root, dirs, files in os.walk(caminho_raiz):
-            # Ignorar pastas de build e cache do Flutter/Git
-            dirs[:] = [d for d in dirs if d not in ['.dart_tool', '.git', 'build', '.idea', 'android/.gradle']]
-            for file in files:
-                if file.endswith(extensoes_permitidas):
-                    ficheiro = Path(root) / file
-                    if ficheiro.name in BLOCKED_NAMES or ficheiro.suffix.lower() in BLOCKED_SUFFIXES:
-                        continue
-                    rel_path = os.path.relpath(ficheiro, caminho_raiz)
-                    ficheiros.append(rel_path)
-                    
-        if not ficheiros:
-            return f"Nenhum ficheiro de código encontrado na pasta '{caminho_pasta}'."
-            
-        return "Ficheiros encontrados no projeto:\n" + "\n".join(ficheiros[:50]) # Limita a 50 ficheiros
-    except (PermissionError, NotADirectoryError):
-        return "Erro: o acesso a esta pasta não é permitido."
-    except Exception as e:
-        logger.exception("Erro inesperado em listar_ficheiros_projeto: %s", e)
-        return f"Error executing tool: {str(e)}. Please adjust your parameters and try again."
+    caminho_raiz = _resolve_allowed_path(caminho_pasta, must_be_directory=True)
+    if not caminho_raiz.exists():
+        return f"Erro: A pasta '{caminho_pasta}' não existe."
+
+    ficheiros: list[str] = []
+    extensoes_permitidas = (".dart", ".yaml", ".json", ".gradle", ".xml", ".properties")
+
+    for root, dirs, files in os.walk(caminho_raiz):
+        dirs[:] = [
+            d for d in dirs
+            if d not in [".dart_tool", ".git", "build", ".idea", "android/.gradle"]
+        ]
+        for file in files:
+            if file.endswith(extensoes_permitidas):
+                ficheiro = Path(root) / file
+                if ficheiro.name in BLOCKED_NAMES or ficheiro.suffix.lower() in BLOCKED_SUFFIXES:
+                    continue
+                ficheiros.append(os.path.relpath(ficheiro, caminho_raiz))
+
+    if not ficheiros:
+        return f"Nenhum ficheiro de código encontrado na pasta '{caminho_pasta}'."
+
+    return "Ficheiros encontrados no projeto:\n" + "\n".join(ficheiros[:50])

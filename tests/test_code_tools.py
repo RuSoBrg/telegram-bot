@@ -24,7 +24,11 @@ class CodeToolsSecurityTests(unittest.TestCase):
     def test_file_tool_returns_safe_error_for_blocked_path(self):
         result = ler_ficheiro_codigo.invoke({"caminho_ficheiro": ".env"})
 
-        self.assertEqual(result, "Erro: o acesso a este caminho não é permitido.")
+        self.assertEqual(
+            result,
+            "Error executing tool ler_ficheiro_codigo: "
+            "O acesso a este tipo de ficheiro está bloqueado.",
+        )
 
 
 if __name__ == "__main__":

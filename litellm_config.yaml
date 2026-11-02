@@ -33,11 +33,6 @@ model_list:
       api_base: os.environ/AZURE_OPENAI_ENDPOINT
       api_version: os.environ/AZURE_OPENAI_API_VERSION
 
-  - model_name: programmer-groq
-    litellm_params:
-      model: groq/llama-3.1-70b-versatile
-      api_key: os.environ/GROQ_API_KEY
-
   # Large files: Gemini 1.5 Pro -> Azure GPT-4o.
   - model_name: file-reader-model
     litellm_params:
@@ -63,12 +58,6 @@ model_list:
       model: gemini/gemini-1.5-flash
       api_key: os.environ/GEMINI_API_KEY
 
-  # Optional local-document embedding route.
-  - model_name: document-embedding-model
-    litellm_params:
-      model: cohere/embed-english-v3.0
-      api_key: os.environ/COHERE_API_KEY
-
 router_settings:
   routing_strategy: simple-shuffle
   num_retries: 1
@@ -82,7 +71,6 @@ router_settings:
         - supervisor-openrouter
     - programmer-model:
         - programmer-azure
-        - programmer-groq
     - file-reader-model:
         - file-reader-azure
     - marketing-model:

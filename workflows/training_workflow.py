@@ -113,13 +113,13 @@ def build_training_workflow():
     builder.add_node(
         "validar_pacote",
         lambda state: _package_command(require_training_package(state)),
-        destinations=("formador", "quality_reviewer", "__end__"),
+        destinations=("formador", "quality_reviewer"),
     )
     tool_node = ToolNode(tools_for("formador"))
     builder.add_node(
         "tools_formador",
         lambda state: _run_training_tools(tool_node, state),
-        destinations=("formador", "__end__"),
+        destinations=("formador",),
     )
     builder.add_node(
         "quality_reviewer",
@@ -139,7 +139,7 @@ def _run_training_tools(node: ToolNode, state: WorkflowState):
 
 def _package_command(state: WorkflowState):
     if state.get("status") == "failed":
-        return Command(goto="__end__", update=state)
+        return Command(goto="quality_reviewer", update=state)
     return Command(
         goto="formador" if state.get("quality_feedback") else "qualidade",
         update=state,

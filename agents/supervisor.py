@@ -16,7 +16,7 @@ def create_supervisor_node():
         steps = state.get("steps", 0)
         if steps >= max_steps:
             return Command(
-                goto="__end__",
+                goto="quality_reviewer",
                 update={
                     "steps": steps,
                     "status": "failed",

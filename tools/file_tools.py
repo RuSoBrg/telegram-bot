@@ -1,6 +1,5 @@
 from io import BytesIO
 import json
-import logging
 import os
 import re
 import time
@@ -10,6 +9,7 @@ from typing import Any
 
 from docx import Document
 from langchain_core.tools import tool
+from tools.safe_execution import safe_tool_execution
 from openpyxl import Workbook
 from pptx import Presentation
 from reportlab.lib.pagesizes import A4
@@ -20,7 +20,6 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 from domain.limits import load_runtime_limits
 from domain.object_store import ObjectStore, create_object_store
 
-logger = logging.getLogger(__name__)
 store: ObjectStore = create_object_store()
 
 
@@ -62,17 +61,6 @@ def _publish(filename: str, data: bytes, mime_type: str) -> str:
     return _artifact(filename, uri, mime_type, data)
 
 
-def _tool_error(error: Exception) -> str:
-    logger.exception("Falha ao gerar ficheiro")
-    return json.dumps(
-        {
-            "tipo": "erro_ficheiro",
-            "erro": f"Error executing tool: {str(error)}. Please adjust your parameters and try again.",
-        },
-        ensure_ascii=False,
-    )
-
-
 def _require_env(*names: str) -> dict[str, str]:
     values = {name: os.getenv(name, "").strip() for name in names}
     missing = [name for name, value in values.items() if not value]
@@ -109,158 +97,157 @@ def _read_key(key: str) -> bytes:
 
 
 @tool
+@safe_tool_execution
 def empacotar_artefactos(
     caminhos: list[str], nome_ficheiro: str = "pacote-formacao"
 ) -> str:
     """Cria um ZIP em memória a partir de chaves de objectos."""
-    try:
-        if not caminhos:
-            raise ValueError("É necessário indicar pelo menos um ficheiro.")
-        output = BytesIO()
-        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-            for key in caminhos:
-                bundle.writestr(key.rsplit("/", 1)[-1], _read_key(key))
-        data = output.getvalue()
-        return _publish(_filename(nome_ficheiro, ".zip", "pacote"), data, "application/zip")
-    except Exception as error:
-        return _tool_error(error)
+    if not caminhos:
+        raise ValueError("É necessário indicar pelo menos um ficheiro.")
+    output = BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for key in caminhos:
+            bundle.writestr(key.rsplit("/", 1)[-1], _read_key(key))
+    data = output.getvalue()
+    return _publish(_filename(nome_ficheiro, ".zip", "pacote"), data, "application/zip")
 
 @tool
+@safe_tool_execution
 def gerar_documento_word(
     conteudo: str, titulo: str = "", nome_ficheiro: str = "documento"
 ) -> str:
     """Cria um documento Word a partir de texto estruturado."""
-    try:
-        document = Document()
-        conteudo = _validate_content(conteudo)
-        if titulo.strip():
-            document.add_heading(titulo.strip(), level=0)
-        for line in _lines(conteudo):
-            if line.startswith("### "):
-                document.add_heading(line[4:], level=2)
-            elif line.startswith("## "):
-                document.add_heading(line[3:], level=1)
-            elif line.startswith("# "):
-                document.add_heading(line[2:], level=0)
-            elif line.startswith(("- ", "* ")):
-                document.add_paragraph(line[2:], style="List Bullet")
-            else:
-                document.add_paragraph(line)
-        output = BytesIO()
-        document.save(output)
-        return _publish(
-            _filename(nome_ficheiro, ".docx", "documento"),
-            output.getvalue(),
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
-    except Exception as error:
-        return _tool_error(error)
+    document = Document()
+    conteudo = _validate_content(conteudo)
+    if titulo.strip():
+        document.add_heading(titulo.strip(), level=0)
+    for line in _lines(conteudo):
+        if line.startswith("### "):
+            document.add_heading(line[4:], level=2)
+        elif line.startswith("## "):
+            document.add_heading(line[3:], level=1)
+        elif line.startswith("# "):
+            document.add_heading(line[2:], level=0)
+        elif line.startswith(("- ", "* ")):
+            document.add_paragraph(line[2:], style="List Bullet")
+        else:
+            document.add_paragraph(line)
+    output = BytesIO()
+    document.save(output)
+    return _publish(
+        _filename(nome_ficheiro, ".docx", "documento"),
+        output.getvalue(),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
 
 @tool
+@safe_tool_execution
 def gerar_documento_excel(
     dados_json: str, nome_ficheiro: str = "folha_calculo"
 ) -> str:
     """Cria um ficheiro Excel a partir de uma lista JSON de linhas."""
-    try:
-        dados = json.loads(_validate_content(dados_json))
-        if not isinstance(dados, list):
-            raise ValueError("Os dados devem ser uma lista de dicionários ou listas.")
+    dados = json.loads(_validate_content(dados_json))
+    if not isinstance(dados, list):
+        raise ValueError("Os dados devem ser uma lista de dicionários ou listas.")
 
-        workbook = Workbook()
-        worksheet = workbook.active
-        if dados and all(isinstance(item, dict) for item in dados):
-            headers = list(dados[0])
-            worksheet.append(headers)
-            for item in dados:
-                worksheet.append([item.get(header) for header in headers])
-        elif all(isinstance(item, list) for item in dados):
-            for row in dados:
-                worksheet.append(row)
-        else:
-            raise ValueError("As linhas devem ser todas dicionários ou todas listas.")
+    workbook = Workbook()
+    worksheet = workbook.active
+    if dados and all(isinstance(item, dict) for item in dados):
+        headers = list(dados[0])
+        worksheet.append(headers)
+        for item in dados:
+            worksheet.append([item.get(header) for header in headers])
+    elif all(isinstance(item, list) for item in dados):
+        for row in dados:
+            worksheet.append(row)
+    else:
+        raise ValueError("As linhas devem ser todas dicionários ou todas listas.")
 
-        output = BytesIO()
-        workbook.save(output)
-        return _publish(
-            _filename(nome_ficheiro, ".xlsx", "excel"),
-            output.getvalue(),
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-    except Exception as error:
-        return _tool_error(error)
+    output = BytesIO()
+    workbook.save(output)
+    return _publish(
+        _filename(nome_ficheiro, ".xlsx", "excel"),
+        output.getvalue(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @tool
+@safe_tool_execution
 def gerar_apresentacao_powerpoint(
     conteudo: str, titulo: str = "", nome_ficheiro: str = "apresentacao"
 ) -> str:
     """Cria uma apresentação PowerPoint a partir de texto estruturado."""
-    try:
-        conteudo = _validate_content(conteudo)
-        presentation = Presentation()
-        title = titulo.strip() or _lines(conteudo)[0][:120]
-        title_slide = presentation.slides.add_slide(presentation.slide_layouts[0])
-        title_slide.shapes.title.text = title
-        title_slide.placeholders[1].text = "Gerado pelo assistente"
-        for block in (b.strip() for b in re.split(r"\n\s*\n", conteudo) if b.strip()):
-            lines = _lines(block)
-            slide = presentation.slides.add_slide(presentation.slide_layouts[1])
-            slide.shapes.title.text = lines[0][:120]
-            body = slide.placeholders[1].text_frame
-            body.clear()
-            for index, line in enumerate(lines[1:] or lines):
-                paragraph = body.paragraphs[0] if index == 0 else body.add_paragraph()
-                paragraph.text = line.removeprefix("- ").removeprefix("* ")
-        output = BytesIO()
-        presentation.save(output)
-        return _publish(
-            _filename(nome_ficheiro, ".pptx", "apresentacao"),
-            output.getvalue(),
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        )
-    except Exception as error:
-        return _tool_error(error)
+    conteudo = _validate_content(conteudo)
+    presentation = Presentation()
+    title = titulo.strip() or _lines(conteudo)[0][:120]
+    title_slide = presentation.slides.add_slide(presentation.slide_layouts[0])
+    title_slide.shapes.title.text = title
+    title_slide.placeholders[1].text = "Gerado pelo assistente"
+    for block in (b.strip() for b in re.split(r"\n\s*\n", conteudo) if b.strip()):
+        lines = _lines(block)
+        slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+        slide.shapes.title.text = lines[0][:120]
+        body = slide.placeholders[1].text_frame
+        body.clear()
+        for index, line in enumerate(lines[1:] or lines):
+            paragraph = body.paragraphs[0] if index == 0 else body.add_paragraph()
+            paragraph.text = line.removeprefix("- ").removeprefix("* ")
+    output = BytesIO()
+    presentation.save(output)
+    return _publish(
+        _filename(nome_ficheiro, ".pptx", "apresentacao"),
+        output.getvalue(),
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    )
 
 
 @tool
+@safe_tool_execution
 def gerar_documento_pdf(
     conteudo: str, titulo: str = "", nome_ficheiro: str = "documento"
 ) -> str:
     """Cria um documento PDF a partir de texto estruturado."""
-    try:
-        conteudo = _validate_content(conteudo)
-        styles = getSampleStyleSheet()
-        story: list[Any] = []
-        if titulo.strip():
-            story.extend([Paragraph(escape(titulo.strip()), styles["Title"]), Spacer(1, 8 * mm)])
-        for line in _lines(conteudo):
-            style = styles["Heading2"] if line.startswith("#") else styles["BodyText"]
-            story.extend(
-                [Paragraph(escape(line.lstrip("# ").strip()), style), Spacer(1, 3 * mm)]
-            )
-        output = BytesIO()
-        SimpleDocTemplate(output, pagesize=A4).build(story)
-        return _publish(_filename(nome_ficheiro, ".pdf", "documento"), output.getvalue(), "application/pdf")
-    except Exception as error:
-        return _tool_error(error)
+    conteudo = _validate_content(conteudo)
+    styles = getSampleStyleSheet()
+    story: list[Any] = []
+    if titulo.strip():
+        story.extend(
+            [Paragraph(escape(titulo.strip()), styles["Title"]), Spacer(1, 8 * mm)]
+        )
+    for line in _lines(conteudo):
+        style = styles["Heading2"] if line.startswith("#") else styles["BodyText"]
+        story.extend(
+            [Paragraph(escape(line.lstrip("# ").strip()), style), Spacer(1, 3 * mm)]
+        )
+    output = BytesIO()
+    SimpleDocTemplate(output, pagesize=A4).build(story)
+    return _publish(
+        _filename(nome_ficheiro, ".pdf", "documento"),
+        output.getvalue(),
+        "application/pdf",
+    )
 
 
 @tool
+@safe_tool_execution
 def gerar_fotografia(prompt: str, nome_ficheiro: str = "imagem", modelo: str = "") -> str:
     """Gera uma imagem com o modelo configurado."""
-    try:
-        response = _google_genai_client().models.generate_content(
-            model=modelo or os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"),
-            contents=_validate_content(prompt),
-            config={"response_modalities": ["TEXT", "IMAGE"]},
-        )
-        return _publish(_filename(nome_ficheiro, ".png", "imagem"), _inline_bytes(response), "image/png")
-    except Exception as error:
-        return _tool_error(error)
+    response = _google_genai_client().models.generate_content(
+        model=modelo or os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"),
+        contents=_validate_content(prompt),
+        config={"response_modalities": ["TEXT", "IMAGE"]},
+    )
+    return _publish(
+        _filename(nome_ficheiro, ".png", "imagem"),
+        _inline_bytes(response),
+        "image/png",
+    )
 
 
 @tool
+@safe_tool_execution
 def gerar_video(
     prompt: str,
     nome_ficheiro: str = "video",
@@ -268,29 +255,26 @@ def gerar_video(
     duracao_segundos: int = 8,
 ) -> str:
     """Gera um vídeo com o modelo configurado."""
-    try:
-        max_seconds = min(8, load_runtime_limits().max_media_seconds)
-        if not 1 <= duracao_segundos <= max_seconds:
-            raise ValueError(f"A duração do vídeo deve estar entre 1 e {max_seconds} segundos.")
-        client = _google_genai_client()
-        operation = client.models.generate_videos(
-            model=modelo or os.getenv("GEMINI_VIDEO_MODEL", "veo-3.1-generate-preview"),
-            prompt=_validate_content(prompt),
-            config={"duration_seconds": duracao_segundos, "number_of_videos": 1},
-        )
-        deadline = time.monotonic() + load_runtime_limits().tool_timeout_seconds
-        while not operation.done:
-            if time.monotonic() >= deadline:
-                raise RuntimeError("A geração do vídeo excedeu o tempo limite configurado.")
-            time.sleep(10)
-            operation = client.operations.get(operation)
-        if getattr(operation, "error", None):
-            raise RuntimeError(str(operation.error))
-        generated = getattr(getattr(operation, "response", None), "generated_videos", None) or []
-        video = getattr(generated[0], "video", None) if generated else None
-        data = getattr(video, "video_bytes", None) if video else None
-        if not data:
-            raise RuntimeError("A resposta do modelo não contém os bytes do vídeo.")
-        return _publish(_filename(nome_ficheiro, ".mp4", "video"), data, "video/mp4")
-    except Exception as error:
-        return _tool_error(error)
+    max_seconds = min(8, load_runtime_limits().max_media_seconds)
+    if not 1 <= duracao_segundos <= max_seconds:
+        raise ValueError(f"A duração do vídeo deve estar entre 1 e {max_seconds} segundos.")
+    client = _google_genai_client()
+    operation = client.models.generate_videos(
+        model=modelo or os.getenv("GEMINI_VIDEO_MODEL", "veo-3.1-generate-preview"),
+        prompt=_validate_content(prompt),
+        config={"duration_seconds": duracao_segundos, "number_of_videos": 1},
+    )
+    deadline = time.monotonic() + load_runtime_limits().tool_timeout_seconds
+    while not operation.done:
+        if time.monotonic() >= deadline:
+            raise RuntimeError("A geração do vídeo excedeu o tempo limite configurado.")
+        time.sleep(10)
+        operation = client.operations.get(operation)
+    if getattr(operation, "error", None):
+        raise RuntimeError(str(operation.error))
+    generated = getattr(getattr(operation, "response", None), "generated_videos", None) or []
+    video = getattr(generated[0], "video", None) if generated else None
+    data = getattr(video, "video_bytes", None) if video else None
+    if not data:
+        raise RuntimeError("A resposta do modelo não contém os bytes do vídeo.")
+    return _publish(_filename(nome_ficheiro, ".mp4", "video"), data, "video/mp4")
