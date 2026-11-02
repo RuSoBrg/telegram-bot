@@ -1,54 +1,56 @@
 services:
   db:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ai_workspace}
       POSTGRES_USER: ${POSTGRES_USER:-ai_workspace}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?configure POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?configure POSTGRES_PASSWORD in .env}
+    ports:
+      - "5432:5432"
     volumes:
-      - ./postgres-data:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     restart: unless-stopped
 
   bot:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["python", "bot.py"]
     env_file:
       - .env
     environment:
+      DATABASE_URL: ${DATABASE_URL:?configure DATABASE_URL in .env}
+      HOST: 0.0.0.0
       PORT: "8000"
-      WORKFLOW_DB_PATH: ${WORKFLOW_DB_PATH:?configure WORKFLOW_DB_PATH}
-      TELEGRAM_WEBHOOK_BASE_URL: ${TELEGRAM_WEBHOOK_BASE_URL:?configure TELEGRAM_WEBHOOK_BASE_URL}
-      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
       OBJECT_STORAGE_PATH: /app/data
+    ports:
+      - "8000:8000"
     volumes:
-      - ./data:/app/data
-    expose:
-      - "8000"
+      - appdata:/app/data
     depends_on:
-      - db
-    restart: unless-stopped
+      db:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)
       interval: 10s
       timeout: 5s
-      retries: 3
-      start_period: 20s
-
-  ngrok:
-    image: ngrok/ngrok:latest
+      retries: 5
+      start_period: 30s
     restart: unless-stopped
-    command:
-      - "http"
-      - "bot:8000"
-      - "--domain=${NGROK_DOMAIN:?configure NGROK_DOMAIN}"
-    environment:
-      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN:?configure NGROK_AUTHTOKEN}
-    depends_on:
-      bot:
-        condition: service_healthy
+
+volumes:
+  pgdata:
+  appdata:
