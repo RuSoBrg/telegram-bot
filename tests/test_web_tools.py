@@ -9,9 +9,10 @@ from tools.web_tools import pesquisar_web
 class WebToolsTests(unittest.TestCase):
     def test_requires_api_key(self):
         with patch.dict(os.environ, {}, clear=True):
-            result = json.loads(pesquisar_web.invoke({"consulta": "Flutter"}))
+            result = pesquisar_web.invoke({"consulta": "Flutter"})
 
-        self.assertIn("TAVILY_API_KEY", result["erro"])
+        self.assertIn("Error executing tool pesquisar_web", result)
+        self.assertIn("TAVILY_API_KEY", result)
 
     @patch("tavily.TavilyClient")
     def test_returns_sources(self, tavily_client):

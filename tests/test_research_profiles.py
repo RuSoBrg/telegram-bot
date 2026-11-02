@@ -1,4 +1,3 @@
-import json
 import os
 import unittest
 from unittest.mock import patch
@@ -18,5 +17,6 @@ class ResearchProfileTests(unittest.TestCase):
         self.assertIn("docs.python.org", client.return_value.search.call_args.kwargs["include_domains"])
 
     def test_invalid_profile_is_explicit(self):
-        result = json.loads(pesquisar_web.invoke({"consulta": "Python", "perfil": "unknown"}))
-        self.assertIn("Perfil de pesquisa inválido", result["erro"])
+        result = pesquisar_web.invoke({"consulta": "Python", "perfil": "unknown"})
+        self.assertIn("Error executing tool pesquisar_web", result)
+        self.assertIn("Perfil de pesquisa inválido", result)

@@ -3,7 +3,7 @@ import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -12,6 +12,7 @@ import uvicorn
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
@@ -19,6 +20,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
 
@@ -28,8 +30,8 @@ from domain.models import ArtifactRecord, WorkflowRun, WorkflowStatus
 from domain.observability import log_event, timed_event
 from domain.persistence import WorkflowStore
 from agents.runtime import PLAFOND_EXAUSTO_MESSAGE, ProviderExhaustedError
-from graph import grafo
 from workflows.main_workflow import GRAPH_RECURSION_LIMIT
+from workflows.main_workflow import build_async_workflow
 from tools.file_tools import store as object_store
 
 logging.basicConfig(
@@ -42,6 +44,7 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 workflow_store = WorkflowStore()
 artifact_store = ArtifactVersionStore()
+grafo: Any | None = None
 
 
 def _workflow_status(approval_required: bool, latest_state: dict) -> WorkflowStatus:
@@ -101,17 +104,26 @@ def _update_run(request_id, approval_required, latest_state, artifacts):
 
 
 async def _send_workflow_message(context, chat_id: int, response: str | None, approval_required: bool, errors):
-    if response:
-        for index in range(0, len(response), 4000):
-            await context.bot.send_message(chat_id=chat_id, text=response[index : index + 4000])
-    elif approval_required:
+    if approval_required:
         await context.bot.send_message(
             chat_id=chat_id,
             text=(
-                "✅ O pacote passou na revisão automática.\n"
-                "Responde com /aprovar para receber os ficheiros ou /rejeitar para pedir alterações."
+                "✅ O pacote está pronto para decisão humana.\n"
+                "Escolhe uma ação:"
+            ),
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton("Aprovar", callback_data="workflow:approved"),
+                        InlineKeyboardButton("Rejeitar", callback_data="workflow:rejected"),
+                    ],
+                    [InlineKeyboardButton("Rever", callback_data="workflow:review")],
+                ]
             ),
         )
+    elif response:
+        for index in range(0, len(response), 4000):
+            await context.bot.send_message(chat_id=chat_id, text=response[index : index + 4000])
     else:
         detail = "\n".join(str(error) for error in errors)
         await context.bot.send_message(
@@ -151,7 +163,7 @@ async def _send_graph_events(
     artefactos: list[dict] = []
     approval_required = False
     latest_state: dict = {}
-    events = await asyncio.to_thread(lambda: list(iter_app_events(eventos)))
+    events = [event async for event in _iter_graph_events(eventos)]
     resposta_final, artefactos, approval_required, latest_state = _collect_graph_events(events)
 
     chat_id = update.effective_chat.id if update.effective_chat else None
@@ -183,8 +195,16 @@ def _track_task(task: asyncio.Task) -> None:
     task.add_done_callback(_background_tasks.discard)
 
 
-def _stream_graph(input_value, chat_id: str):
-    return grafo.stream(
+async def _iter_graph_events(eventos):
+    async for event in eventos:
+        for app_event in iter_app_events([event]):
+            yield app_event
+
+
+async def _stream_graph(input_value, chat_id: str):
+    if grafo is None:
+        raise RuntimeError("O grafo ainda não foi inicializado.")
+    return grafo.astream(
         input_value,
         config={
             "configurable": {"thread_id": chat_id},
@@ -202,7 +222,7 @@ async def _run_graph_events(
     request_id: str,
 ) -> None:
     try:
-        eventos = _stream_graph(graph_input, chat_id)
+        eventos = await _stream_graph(graph_input, chat_id)
         with timed_event(
             "workflow_execution",
             request_id=request_id,
@@ -267,6 +287,47 @@ async def reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _track_task(task)
 
 
+async def approval_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Resume the durable LangGraph thread from an inline approval action."""
+    query = update.callback_query
+    if query is None or query.message is None:
+        return
+    await query.answer()
+    action = (query.data or "").split(":", 1)[-1]
+    if action not in {"approved", "rejected", "review"}:
+        await query.edit_message_text("Ação de aprovação inválida.")
+        return
+
+    thread_id = str(query.message.chat.id)
+    decision = "approved" if action == "approved" else "rejected"
+    if action == "review":
+        decision = "review"
+    config = {"configurable": {"thread_id": thread_id}}
+    if grafo is None:
+        await query.edit_message_text("O workflow ainda não está disponível.")
+        return
+    await grafo.aupdate_state(
+        config,
+        {"approval_decision": decision, "approval_required": False},
+    )
+    await query.edit_message_text(
+        "✅ Aprovado. A processar..." if decision == "approved"
+        else "📝 Pedido de revisão recebido. A processar..."
+    )
+    task = asyncio.create_task(
+        _run_graph_events(
+            update,
+            context,
+            Command(resume=decision),
+            thread_id,
+            context.user_data.get("request_id", ""),
+        )
+    )
+    _track_task(task)
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.text or not update.effective_chat:
         return
@@ -313,6 +374,7 @@ def _build_application() -> Application:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("aprovar", approve))
     application.add_handler(CommandHandler("rejeitar", reject))
+    application.add_handler(CallbackQueryHandler(approval_callback, pattern=r"^workflow:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     return application
 
@@ -324,8 +386,10 @@ WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
+    global grafo
     if telegram_application is None:
         raise RuntimeError("TELEGRAM_TOKEN não configurado.")
+    grafo = await build_async_workflow()
     await telegram_application.initialize()
     await telegram_application.start()
     base_url = os.getenv("TELEGRAM_WEBHOOK_BASE_URL", "").strip().rstrip("/")
@@ -343,6 +407,7 @@ async def _lifespan(_: FastAPI):
     finally:
         await telegram_application.stop()
         await telegram_application.shutdown()
+        grafo = None
 
 
 api = FastAPI(lifespan=_lifespan)

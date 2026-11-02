@@ -8,7 +8,10 @@ from domain.checkpoint import create_checkpoint_saver, get_checkpoint_saver
 
 class CheckpointTests(unittest.TestCase):
     @unittest.skipUnless(
-        os.getenv("WORKFLOW_DB_PATH", "").startswith(("postgresql://", "postgres://")),
+        (
+            os.getenv("DATABASE_URL")
+            or os.getenv("WORKFLOW_DB_PATH", "")
+        ).startswith(("postgresql://", "postgres://")),
         "requires a PostgreSQL test database",
     )
     def test_checkpoint_saver_uses_postgres(self):

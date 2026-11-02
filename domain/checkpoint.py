@@ -40,8 +40,12 @@ async def create_async_checkpoint_saver() -> AsyncPostgresSaver:
     return _async_saver
 
 
-def get_checkpoint_saver(*, fallback_to_memory: bool = True) -> BaseCheckpointSaver:
-    """Retorna o checkpointer configurado, com fallback resiliente para MemorySaver se DB indisponível."""
+def get_checkpoint_saver(*, fallback_to_memory: bool = False) -> BaseCheckpointSaver:
+    """Retorna o checkpointer configurado.
+
+    O fallback para memória só deve ser pedido explicitamente em testes ou
+    desenvolvimento local, porque não sobrevive a reinícios do processo.
+    """
     try:
         return create_checkpoint_saver()
     except Exception as error:

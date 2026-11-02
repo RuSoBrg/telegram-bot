@@ -9,11 +9,7 @@ from agents.models import tools_for
 from agents.quality_reviewer import create_quality_node
 from agents.specialists import create_specialist_node
 from agents.supervisor import create_supervisor_node
-from domain.checkpoint import (
-    create_async_checkpoint_saver,
-    create_checkpoint_saver,
-    get_checkpoint_saver,
-)
+from domain.checkpoint import create_async_checkpoint_saver, create_checkpoint_saver
 from domain.limits import load_runtime_limits
 from domain.models import WorkflowStatus
 from domain.quotas import QuotaExceededError, UserQuotaStore
@@ -29,11 +25,7 @@ GRAPH_RECURSION_LIMIT = 5
 def build_workflow(
     checkpointer: BaseCheckpointSaver | AsyncPostgresSaver | None = None,
 ) -> Any:
-    """Build the resilient graph used by synchronous application entry points.
-
-    The PostgreSQL saver is preferred, while ``get_checkpoint_saver`` keeps local
-    development available when PostgreSQL is temporarily unavailable.
-    """
+    """Build the production graph with durable PostgreSQL checkpointing."""
     builder = StateGraph(WorkflowState)
     builder.add_node("enforce_quota", _enforce_quota)
     builder.add_node(
@@ -96,10 +88,10 @@ def build_workflow(
     builder.add_edge("enforce_quota", "supervisor")
     builder.add_edge("training_workflow", "quality_reviewer")
 
-    saver = checkpointer or get_checkpoint_saver(fallback_to_memory=True)
+    saver = checkpointer or create_checkpoint_saver()
     return builder.compile(
         checkpointer=saver,
-        interrupt_before=["tools_engenharia"],
+        interrupt_before=["tools_engenharia", "quality_reviewer"],
     )
 
 
@@ -170,6 +162,3 @@ def _enforce_quota(state: WorkflowState) -> Any:
             },
         )
     return {"status": "producing"}
-
-
-grafo = build_workflow()

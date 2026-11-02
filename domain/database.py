@@ -4,10 +4,10 @@ import psycopg
 
 
 def database_url() -> str:
-    url = os.getenv("WORKFLOW_DB_PATH", "").strip()
+    url = (os.getenv("DATABASE_URL") or os.getenv("WORKFLOW_DB_PATH") or "").strip()
     if not url.startswith(("postgresql://", "postgres://")):
         raise RuntimeError(
-            "WORKFLOW_DB_PATH deve conter uma connection string PostgreSQL."
+            "DATABASE_URL deve conter uma connection string PostgreSQL."
         )
     return url
 

@@ -1,7 +1,7 @@
 import json
 import os
 
-from langchain_core.messages import SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langgraph.types import Command, interrupt
 
 from agents.models import quality_models, quality_tools
@@ -181,15 +181,29 @@ def _approved_command(
         objective=state.get("objective", ""),
     )
     if approval_request and os.getenv("REQUIRE_HUMAN_APPROVAL", "true").lower() == "true":
-        approval = interrupt({**approval_request.as_dict(), "score": report.score})
+        approval = state.get("approval_decision") or interrupt(
+            {**approval_request.as_dict(), "score": report.score}
+        )
         if approval != "approved":
             return Command(
                 goto=target,
-                update={**result, "status": "rejected", "quality_feedback": "Pacote rejeitado."},
+                update={
+                    **result,
+                    "status": "rejected",
+                    "quality_feedback": "Pacote rejeitado.",
+                    "approval_required": False,
+                    "approval_decision": "",
+                },
             )
     return Command(
         goto=approved_target,
-        update={**result, "status": "approved", "quality_feedback": ""},
+        update={
+            **result,
+            "status": "approved",
+            "quality_feedback": "",
+            "approval_required": False,
+            "approval_decision": "",
+        },
     )
 
 
@@ -201,6 +215,32 @@ def create_quality_node(
     reviewer, research = quality_models()
 
     def quality_node(state: WorkflowState):
+        approval_decision = state.get("approval_decision", "")
+        if approval_decision == "rejected":
+            return Command(
+                goto="__end__",
+                update={
+                    "status": "rejected",
+                    "approval_required": False,
+                    "approval_decision": "",
+                    "messages": [
+                        AIMessage(content="📝 O pacote foi rejeitado pelo utilizador.")
+                    ],
+                },
+            )
+        if approval_decision == "review":
+            return Command(
+                goto=target,
+                update={
+                    "status": "revising",
+                    "approval_required": False,
+                    "approval_decision": "",
+                    "quality_feedback": (
+                        "O utilizador pediu revisão. Corrige os problemas "
+                        "identificados antes de voltares à revisão final."
+                    ),
+                },
+            )
         iteration = state.get("quality_iterations", 0)
         if iteration >= max_iterations:
             return _limit_command(max_iterations, iteration)

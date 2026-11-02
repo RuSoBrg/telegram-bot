@@ -26,3 +26,4 @@ class WorkflowState(TypedDict, total=False):
     quality_feedback: str
     quality_iterations: int
     steps: int
+    approval_decision: str
