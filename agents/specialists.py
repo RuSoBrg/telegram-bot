@@ -5,6 +5,8 @@ from langgraph.types import Command
 
 from agents.models import specialist_models
 from agents.runtime import (
+    PLAFOND_EXAUSTO_MESSAGE,
+    ProviderExhaustedError,
     content_to_text,
     invoke_with_fallback,
     load_prompt,
@@ -81,7 +83,11 @@ def create_specialist_node(
                 update={
                     "messages": [
                         AIMessage(
-                            content=f"❌ {label} falhou e o workflow foi terminado.\nErro: {detail}"
+                            content=(
+                                PLAFOND_EXAUSTO_MESSAGE
+                                if isinstance(error, ProviderExhaustedError)
+                                else f"❌ {label} falhou e o workflow foi terminado.\nErro: {detail}"
+                            )
                         )
                     ],
                     "errors": [f"Falha no agente {agent_name}: {detail}"],

@@ -1,8 +1,8 @@
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.types import Command
 
 from agents.models import supervisor_model
-from agents.runtime import load_prompt
+from agents.runtime import PLAFOND_EXAUSTO_MESSAGE, load_prompt, invoke_with_fallback
 from domain.state import WorkflowState
 from domain.limits import load_runtime_limits
 
@@ -32,7 +32,27 @@ def create_supervisor_node():
                 + "\n\nEscolhe entre marketing, engenharia, vida, formador ou finalizar."
             )
         ] + state.get("messages", [])
-        decision = model.invoke(messages)
+        try:
+            decision = invoke_with_fallback(model, None, messages)
+        except Exception as error:
+            detail = str(error)
+            return Command(
+                goto="__end__",
+                update={
+                    "status": "failed",
+                    "steps": steps + 1,
+                    "errors": [detail],
+                    "messages": [
+                        AIMessage(
+                            content=(
+                                PLAFOND_EXAUSTO_MESSAGE
+                                if "plafond" in detail.lower()
+                                else f"Não foi possível encaminhar o pedido: {detail}"
+                            )
+                        )
+                    ],
+                },
+            )
         destination = {
             "formador": "training_workflow",
             "finalizar": "quality_reviewer",

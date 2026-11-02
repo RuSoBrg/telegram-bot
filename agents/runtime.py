@@ -1,11 +1,20 @@
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from langchain_core.messages import AIMessage, HumanMessage
 
 logger = logging.getLogger(__name__)
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+PLAFOND_EXAUSTO_MESSAGE = (
+    "Neste momento esgotei o meu plafond nos fornecedores principais. "
+    "Retomarei o serviço a 100% no início do próximo ciclo. Por favor, "
+    "tenta um pedido mais simples amanhã."
+)
+
+
+class ProviderExhaustedError(RuntimeError):
+    """Raised when every configured provider route is unavailable."""
 
 
 def load_prompt(filename: str) -> str:
@@ -52,7 +61,23 @@ def prepare_messages_for_model(messages: list[Any]) -> list[Any]:
 
 def _is_api_transient_error(error: Exception) -> bool:
     status_code = getattr(error, "status_code", None)
-    return status_code in {429, 500, 502, 503, 504} or any(
+    error_name = type(error).__name__.lower()
+    authentication_error = (
+        "authenticationerror" in error_name
+        or "insufficientquota" in error_name
+    )
+    quota_error = any(
+        marker in str(error).upper()
+        for marker in (
+            "INSUFFICIENT_QUOTA",
+            "INSUFFICIENTQUOTA",
+            "QUOTA_EXCEEDED",
+            "BILLING",
+            "CREDIT",
+            "RESOURCE_EXHAUSTED",
+        )
+    )
+    return authentication_error or quota_error or status_code in {429, 500, 502, 503, 504} or any(
         marker in str(error).upper()
         for marker in (
             "429",
@@ -61,17 +86,55 @@ def _is_api_transient_error(error: Exception) -> bool:
             "503",
             "504",
             "UNAVAILABLE",
-            "RESOURCE_EXHAUSTED",
         )
     )
 
 
-def invoke_with_fallback(primary: Any, fallback: Any, messages: Any) -> Any:
-    """Invoke the primary model and retry transient API failures with fallback."""
-    try:
-        return primary.invoke(messages)
-    except Exception as error:
-        if not _is_api_transient_error(error):
-            raise
-        logger.warning("Modelo primário indisponível; a usar o fallback.")
-        return fallback.invoke(messages)
+def _provider_chain(primary: Any, fallback: Any, fallbacks: Iterable[Any]) -> list[Any]:
+    chain: list[Any] = []
+    for model in (primary, fallback, *fallbacks):
+        if model is not None and not any(model is existing for existing in chain):
+            chain.append(model)
+    return chain
+
+
+def invoke_with_fallback(
+    primary: Any,
+    fallback: Any,
+    messages: Any,
+    *,
+    fallbacks: Iterable[Any] = (),
+) -> Any:
+    """Invoke an ordered provider chain and never hide provider exhaustion."""
+    failures: list[str] = []
+    for model in _provider_chain(primary, fallback, fallbacks):
+        try:
+            return model.invoke(messages)
+        except Exception as error:
+            if not _is_api_transient_error(error):
+                raise
+            failures.append(f"{type(error).__name__}: {error}")
+            logger.warning("Rota de modelo indisponível; a tentar a seguinte.")
+    detail = "; ".join(failures) or "Nenhuma rota de modelo configurada."
+    raise ProviderExhaustedError(f"{PLAFOND_EXAUSTO_MESSAGE} ({detail})")
+
+
+async def ainvoke_with_fallback(
+    primary: Any,
+    fallback: Any,
+    messages: Any,
+    *,
+    fallbacks: Iterable[Any] = (),
+) -> Any:
+    """Async equivalent of :func:`invoke_with_fallback`."""
+    failures: list[str] = []
+    for model in _provider_chain(primary, fallback, fallbacks):
+        try:
+            return await model.ainvoke(messages)
+        except Exception as error:
+            if not _is_api_transient_error(error):
+                raise
+            failures.append(f"{type(error).__name__}: {error}")
+            logger.warning("Rota de modelo assíncrona indisponível; a tentar a seguinte.")
+    detail = "; ".join(failures) or "Nenhuma rota de modelo configurada."
+    raise ProviderExhaustedError(f"{PLAFOND_EXAUSTO_MESSAGE} ({detail})")

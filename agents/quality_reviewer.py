@@ -6,6 +6,8 @@ from langgraph.types import Command, interrupt
 
 from agents.models import quality_models, quality_tools
 from agents.runtime import (
+    PLAFOND_EXAUSTO_MESSAGE,
+    ProviderExhaustedError,
     invoke_with_fallback,
     load_prompt,
     prepare_messages_for_model,
@@ -219,6 +221,19 @@ def create_quality_node(max_iterations: int, target: str = "formador"):
             )
         except Exception as error:
             detail = f"{type(error).__name__}: {error}"
+            if isinstance(error, ProviderExhaustedError):
+                return Command(
+                    goto="__end__",
+                    update={
+                        "messages": [ToolMessage(
+                            content=PLAFOND_EXAUSTO_MESSAGE,
+                            tool_call_id="quality-provider-exhausted",
+                        )],
+                        "status": "failed",
+                        "errors": [detail],
+                        "quality_iterations": iteration + 1,
+                    },
+                )
             return _failure_command(detail, iteration)
         report, feedback = _review_report(reviewer_decisions, validation)
         result = {

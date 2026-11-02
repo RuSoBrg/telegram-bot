@@ -16,7 +16,7 @@ from domain.checkpoint import (
 )
 from domain.limits import load_runtime_limits
 from domain.models import WorkflowStatus
-from domain.quotas import UserQuotaStore
+from domain.quotas import QuotaExceededError, UserQuotaStore
 from domain.state import WorkflowState
 from workflows.training_workflow import build_training_workflow
 
@@ -123,7 +123,17 @@ def _run_tools(node: ToolNode, state: WorkflowState, target: str) -> Any:
                 ],
             },
         )
-    update_data = node.invoke(state)
+    try:
+        update_data = node.invoke(state)
+    except Exception as error:
+        return Command(
+            goto="__end__",
+            update={
+                "steps": steps + 1,
+                "status": "failed",
+                "errors": [f"Falha na ferramenta: {type(error).__name__}: {error}"],
+            },
+        )
     update_data["steps"] = steps + 1
     return Command(goto=target, update=update_data)
 
@@ -136,10 +146,26 @@ def _request_engineering_approval(state: WorkflowState) -> dict[str, Any]:
     }
 
 
-def _enforce_quota(state: WorkflowState) -> dict[str, str]:
+def _enforce_quota(state: WorkflowState) -> Any:
     """Consume one workflow quota unit before any model or tool invocation."""
     user_id = state.get("user_id") or "default_user"
-    UserQuotaStore().consume(user_id, "workflow")
+    limits = load_runtime_limits()
+    try:
+        UserQuotaStore(
+            max_operations=limits.max_user_operations,
+            window_seconds=limits.quota_window_seconds,
+        ).consume(user_id, "workflow")
+    except QuotaExceededError as error:
+        from langgraph.types import Command
+
+        return Command(
+            goto="__end__",
+            update={
+                "status": "failed",
+                "errors": [str(error)],
+                "messages": [{"role": "assistant", "content": str(error)}],
+            },
+        )
     return {"status": "producing"}
 
 

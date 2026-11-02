@@ -24,11 +24,10 @@ from telegram.ext import (
 
 from domain.artifacts import ArtifactVersionStore
 from domain.events import iter_app_events
-from domain.limits import load_runtime_limits
 from domain.models import ArtifactRecord, WorkflowRun, WorkflowStatus
 from domain.observability import log_event, timed_event
 from domain.persistence import WorkflowStore
-from domain.quotas import QuotaExceededError, UserQuotaStore
+from agents.runtime import PLAFOND_EXAUSTO_MESSAGE
 from graph import grafo
 from tools.file_tools import store as object_store
 
@@ -42,11 +41,6 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 workflow_store = WorkflowStore()
 artifact_store = ArtifactVersionStore()
-runtime_limits = load_runtime_limits()
-quota_store = UserQuotaStore(
-    max_operations=runtime_limits.max_user_operations,
-    window_seconds=runtime_limits.quota_window_seconds,
-)
 
 
 def _workflow_status(approval_required: bool, latest_state: dict) -> WorkflowStatus:
@@ -121,7 +115,12 @@ async def _send_workflow_message(context, chat_id: int, response: str | None, ap
         detail = "\n".join(str(error) for error in errors)
         await context.bot.send_message(
             chat_id=chat_id,
-            text="❌ O workflow terminou sem resposta." + (f"\nErro: {detail}" if detail else ""),
+            text=(
+                PLAFOND_EXAUSTO_MESSAGE
+                if any("plafond" in str(error).lower() for error in errors)
+                else "❌ O workflow terminou sem resposta."
+                + (f"\nErro: {detail}" if detail else "")
+            ),
         )
 
 
@@ -208,12 +207,16 @@ async def _run_graph_events(
         ):
             await _send_graph_events(update, context, eventos, request_id)
         log_event("workflow_finished", request_id=request_id)
-    except Exception:
+    except Exception as error:
         logger.exception("Erro ao executar workflow %s", request_id)
         if update.effective_chat:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text="❌ O workflow terminou com erro. Tenta novamente mais tarde.",
+                text=(
+                    PLAFOND_EXAUSTO_MESSAGE
+                    if "plafond" in str(error).lower()
+                    else "❌ O workflow terminou com erro. Tenta novamente mais tarde."
+                ),
             )
 
 
@@ -268,16 +271,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         chat_id=update.effective_chat.id,
         action=ChatAction.TYPING,
     )
-    try:
-        quota_store.consume(
-            str(update.effective_user.id if update.effective_user else update.effective_chat.id),
-            "workflow",
-        )
-    except QuotaExceededError as error:
-        logger.warning("Quota excedida no chat %s: %s", update.effective_chat.id, error)
-        await update.message.reply_text("⏳ A quota diária foi atingida. Tenta novamente mais tarde.")
-        return
-
     request_id = str(uuid4())
     chat_id = str(update.effective_chat.id)
     context.user_data["request_id"] = request_id
