@@ -52,10 +52,10 @@ def _workflow_status(
     approval_required: bool,
     latest_state: Mapping[str, Any],
 ) -> WorkflowStatus:
-    if approval_required:
-        return WorkflowStatus.APPROVAL_REQUIRED
     if latest_state.get("status") == "failed":
         return WorkflowStatus.FAILED
+    if approval_required:
+        return WorkflowStatus.APPROVAL_REQUIRED
     return WorkflowStatus.APPROVED
 
 
@@ -121,7 +121,10 @@ async def _send_workflow_message(
     approval_required: bool,
     errors: list[Any],
 ) -> None:
-    if approval_required:
+    failed = latest_state.get("status") == "failed" or bool(
+        latest_state.get("errors")
+    )
+    if approval_required and not failed:
         await context.bot.send_message(
             chat_id=chat_id,
             text=(
@@ -142,16 +145,7 @@ async def _send_workflow_message(
         for index in range(0, len(response), 4000):
             await context.bot.send_message(chat_id=chat_id, text=response[index : index + 4000])
     else:
-        detail = "\n".join(str(error) for error in errors)
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=(
-                PLAFOND_EXAUSTO_MESSAGE
-                if any("plafond" in str(error).lower() for error in errors)
-                else "❌ O workflow terminou sem resposta."
-                + (f"\nErro: {detail}" if detail else "")
-            ),
-        )
+        await context.bot.send_message(chat_id=chat_id, text=PLAFOND_EXAUSTO_MESSAGE)
 
 
 async def _send_artifacts(context, chat_id: int, artifacts: list[dict]) -> None:

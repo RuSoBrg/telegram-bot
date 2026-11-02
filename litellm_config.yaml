@@ -1,8 +1,8 @@
-# LiteLLM Proxy routing aliases and fallback rules.
-# The application can address these logical names through the LiteLLM proxy.
+# Runtime capability pools. Deployments with the same model_name form a pool;
+# LiteLLM chooses the currently healthy/lowest-latency deployment at request time.
 
 model_list:
-  # Supervisor: Azure OpenAI -> Groq -> OpenRouter.
+  # Supervisor pool: all configured providers are eligible at runtime.
   - model_name: supervisor-model
     litellm_params:
       model: azure/${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}
@@ -10,72 +10,79 @@ model_list:
       api_base: os.environ/AZURE_OPENAI_ENDPOINT
       api_version: os.environ/AZURE_OPENAI_API_VERSION
 
-  - model_name: supervisor-groq
+  - model_name: supervisor-model
     litellm_params:
       model: groq/llama-3.1-70b-versatile
       api_key: os.environ/GROQ_API_KEY
+    model_info:
+      model_group: supervisor-model
 
-  - model_name: supervisor-openrouter
+  - model_name: supervisor-model
     litellm_params:
       model: openrouter/anthropic/claude-3-haiku
       api_key: os.environ/OPENROUTER_API_KEY
+    model_info:
+      model_group: supervisor-model
 
-  # Programmer Agent: OpenRouter Claude -> Azure OpenAI -> Groq.
+  # Programmer pool: choose among capable providers at runtime.
   - model_name: programmer-model
     litellm_params:
       model: openrouter/anthropic/claude-3.5-sonnet
       api_key: os.environ/OPENROUTER_API_KEY
 
-  - model_name: programmer-azure
+  - model_name: programmer-model
     litellm_params:
       model: azure/${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}
       api_key: os.environ/AZURE_OPENAI_API_KEY
       api_base: os.environ/AZURE_OPENAI_ENDPOINT
       api_version: os.environ/AZURE_OPENAI_API_VERSION
+    model_info:
+      model_group: programmer-model
 
-  # Large files: Gemini 1.5 Pro -> Azure GPT-4o.
+  # Large-file pool: choose a healthy long-context deployment at runtime.
   - model_name: file-reader-model
     litellm_params:
       model: gemini/gemini-1.5-pro
       api_key: os.environ/GEMINI_API_KEY
       request_timeout: 120
 
-  - model_name: file-reader-azure
+  - model_name: file-reader-model
     litellm_params:
       model: azure/${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}
       api_key: os.environ/AZURE_OPENAI_API_KEY
       api_base: os.environ/AZURE_OPENAI_ENDPOINT
       api_version: os.environ/AZURE_OPENAI_API_VERSION
+    model_info:
+      model_group: file-reader-model
 
-  # Marketing: Groq -> Gemini Flash.
+  # Marketing pool: choose the currently available fast deployment.
   - model_name: marketing-model
     litellm_params:
       model: groq/llama-3.1-70b-versatile
       api_key: os.environ/GROQ_API_KEY
 
-  - model_name: marketing-gemini
+  - model_name: marketing-model
     litellm_params:
       model: gemini/gemini-1.5-flash
       api_key: os.environ/GEMINI_API_KEY
+    model_info:
+      model_group: marketing-model
 
 router_settings:
-  routing_strategy: simple-shuffle
-  # Fail over immediately for exhausted or invalid credentials.
+  routing_strategy: latency-based-routing
+  # Health and latency are evaluated continuously; no fixed provider ranking.
+  enable_health_check_routing: true
+  health_check_staleness_threshold: 60
+  background_health_check_model_groups:
+    - supervisor-model
+    - programmer-model
+    - file-reader-model
+    - marketing-model
   num_retries: 0
   retry_after: 2
   timeout: 60
   allowed_fails: 2
   cooldown_time: 30
-  fallbacks:
-    - supervisor-model:
-        - supervisor-groq
-        - supervisor-openrouter
-    - programmer-model:
-        - programmer-azure
-    - file-reader-model:
-        - file-reader-azure
-    - marketing-model:
-        - marketing-gemini
   retry_policy:
     RateLimitErrorRetries: 0
     AuthenticationErrorRetries: 0

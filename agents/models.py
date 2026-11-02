@@ -113,6 +113,27 @@ def _expand_environment(value: Any) -> Any:
     return value
 
 
+def _configured_deployments(model_list: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only deployments whose referenced credentials exist at runtime."""
+    configured: list[dict[str, Any]] = []
+    for deployment in model_list:
+        params = deployment.get("litellm_params", {})
+        api_key = params.get("api_key", "")
+        if isinstance(api_key, str) and api_key.startswith("os.environ/"):
+            variable = api_key.removeprefix("os.environ/")
+            if not os.getenv(variable, "").strip():
+                continue
+        provider_model = str(params.get("model", ""))
+        if provider_model.startswith("azure/") and not str(
+            params.get("api_base", "")
+        ).strip():
+            continue
+        configured.append(deployment)
+    if not configured:
+        raise RuntimeError("Nenhum deployment LiteLLM tem credenciais configuradas.")
+    return configured
+
+
 @lru_cache(maxsize=1)
 def _router() -> Router:
     """Load the repository's LiteLLM routes once per process."""
@@ -134,12 +155,17 @@ def _router() -> Router:
             "timeout",
             "allowed_fails",
             "cooldown_time",
-            "fallbacks",
             "context_window_fallbacks",
+            "enable_health_check_routing",
+            "health_check_staleness_threshold",
+            "background_health_check_model_groups",
         )
         if key in router_settings
     }
-    return Router(model_list=model_list, **supported_settings)
+    return Router(
+        model_list=_configured_deployments(model_list),
+        **supported_settings,
+    )
 
 
 def _model(
