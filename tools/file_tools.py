@@ -1,9 +1,10 @@
-from io import BytesIO
+import hashlib
 import json
 import os
 import re
 import time
 import zipfile
+from io import BytesIO
 from html import escape
 from typing import Any
 
@@ -50,7 +51,7 @@ def _artifact(filename: str, uri: str, mime_type: str, data: bytes) -> str:
             "uri": uri,
             "mime_type": mime_type,
             "size_bytes": len(data),
-            "sha256": __import__("hashlib").sha256(data).hexdigest(),
+            "sha256": hashlib.sha256(data).hexdigest(),
         },
         ensure_ascii=False,
     )

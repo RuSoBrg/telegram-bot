@@ -3,6 +3,7 @@ import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Mapping
 from typing import Annotated, Any
 from uuid import uuid4
 
@@ -47,7 +48,10 @@ artifact_store = ArtifactVersionStore()
 grafo: Any | None = None
 
 
-def _workflow_status(approval_required: bool, latest_state: dict) -> WorkflowStatus:
+def _workflow_status(
+    approval_required: bool,
+    latest_state: Mapping[str, Any],
+) -> WorkflowStatus:
     if approval_required:
         return WorkflowStatus.APPROVAL_REQUIRED
     if latest_state.get("status") == "failed":
@@ -55,11 +59,13 @@ def _workflow_status(approval_required: bool, latest_state: dict) -> WorkflowSta
     return WorkflowStatus.APPROVED
 
 
-def _collect_graph_events(events):
-    response = None
-    artifacts = []
+def _collect_graph_events(
+    events: list[Any],
+) -> tuple[str | None, list[dict[str, Any]], bool, dict[str, Any]]:
+    response: str | None = None
+    artifacts: list[dict[str, Any]] = []
     approval_required = False
-    latest_state = {}
+    latest_state: dict[str, Any] = {}
     for event in events:
         latest_state = event.metadata.get("state", latest_state)
         if event.type == "status" and event.content == "approval_required":
@@ -71,7 +77,12 @@ def _collect_graph_events(events):
     return response, artifacts, approval_required, latest_state
 
 
-def _update_run(request_id, approval_required, latest_state, artifacts):
+def _update_run(
+    request_id: str,
+    approval_required: bool,
+    latest_state: Mapping[str, Any],
+    artifacts: list[dict[str, Any]],
+) -> None:
     run = workflow_store.get(request_id)
     if not run:
         return
@@ -103,7 +114,13 @@ def _update_run(request_id, approval_required, latest_state, artifacts):
     workflow_store.save(run)
 
 
-async def _send_workflow_message(context, chat_id: int, response: str | None, approval_required: bool, errors):
+async def _send_workflow_message(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    response: str | None,
+    approval_required: bool,
+    errors: list[Any],
+) -> None:
     if approval_required:
         await context.bot.send_message(
             chat_id=chat_id,
@@ -156,7 +173,7 @@ async def _send_artifacts(context, chat_id: int, artifacts: list[dict]) -> None:
 async def _send_graph_events(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-    eventos,
+    eventos: AsyncIterator[Any],
     request_id: str,
 ) -> bool:
     resposta_final = None
@@ -195,13 +212,13 @@ def _track_task(task: asyncio.Task) -> None:
     task.add_done_callback(_background_tasks.discard)
 
 
-async def _iter_graph_events(eventos):
+async def _iter_graph_events(eventos: AsyncIterator[Any]) -> AsyncIterator[Any]:
     async for event in eventos:
         for app_event in iter_app_events([event]):
             yield app_event
 
 
-async def _stream_graph(input_value, chat_id: str):
+async def _stream_graph(input_value: Any, chat_id: str) -> Any:
     if grafo is None:
         raise RuntimeError("O grafo ainda não foi inicializado.")
     return grafo.astream(
@@ -415,12 +432,12 @@ api = FastAPI(lifespan=_lifespan)
 
 @api.get("/")
 @api.get("/health")
-async def health_check():
+async def health_check() -> dict[str, str]:
     return {"status": "ok", "service": "telegram-bot"}
 
 
 @api.get("/webhook-info")
-async def get_webhook_info():
+async def get_webhook_info() -> dict[str, Any]:
     if telegram_application is None:
         return {"error": "Telegram application not configured"}
     info = await telegram_application.bot.get_webhook_info()
@@ -445,7 +462,7 @@ async def get_webhook_info():
 async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: Annotated[str | None, Header()] = None,
-):
+) -> dict[str, bool]:
     if WEBHOOK_SECRET and not hmac.compare_digest(
         x_telegram_bot_api_secret_token or "", WEBHOOK_SECRET
     ):

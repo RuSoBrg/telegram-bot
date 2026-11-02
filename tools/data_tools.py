@@ -108,7 +108,7 @@ def executar_query_sql(
     normalized = query.strip()
     if not normalized or not _READ_ONLY_SQL.match(normalized):
         raise ValueError("A query deve ser uma operação SQL de leitura.")
-    if _FORBIDDEN_SQL.search(normalized) or ";" in normalized.rstrip(";"):
+    if _FORBIDDEN_SQL.search(normalized) or normalized.rstrip().count(";") > 1:
         raise ValueError("A query contém uma instrução proibida ou múltiplas queries.")
 
     connection = sqlite3.connect(f"file:{database.resolve()}?mode=ro", uri=True)

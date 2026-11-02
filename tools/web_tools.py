@@ -1,8 +1,9 @@
 import json
 import os
+from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 from typing import Any
 
 from langchain_core.tools import tool
@@ -74,9 +75,7 @@ def pesquisar_web(
             "url": item.get("url", ""),
             "conteudo": (item.get("content") or "")[:MAX_CONTENT_PER_RESULT],
             "domain": urlparse(item.get("url", "")).netloc,
-            "retrieved_at": __import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            ).isoformat(),
+            "retrieved_at": datetime.now(timezone.utc).isoformat(),
             "reliability": "primary"
             if perfil in {"official_docs", "legislation", "technical"}
             else "unknown",
