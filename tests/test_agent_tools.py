@@ -16,6 +16,7 @@ class AgentToolPolicyTests(unittest.TestCase):
             names,
             {
                 "pesquisar_web",
+                "raspar_pagina_web",
                 "gerar_documento_word",
                 "gerar_documento_excel",
                 "gerar_documento_pdf",

@@ -23,6 +23,9 @@ dependencies = [
     "openpyxl",
     "reportlab",
     "tavily-python",
+    "pandas",
+    "beautifulsoup4",
+    "markdownify",
 ]
 
 [dependency-groups]

@@ -1,5 +1,7 @@
 import json
 import os
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from urllib.parse import urlparse
 from typing import Any
 
@@ -21,6 +23,7 @@ RESEARCH_PROFILES = {
     "market": [],
     "general": [],
 }
+MAX_SCRAPED_CONTENT = 12000
 
 
 @tool
@@ -98,3 +101,65 @@ def pesquisar_web(
     if os.getenv("RESEARCH_CACHE_ENABLED", "true").lower() == "true":
         research_cache.put(cache_key, payload)
     return json.dumps(payload, ensure_ascii=False)
+
+
+@tool
+@safe_tool_execution
+def raspar_pagina_web(url: str, timeout_seconds: int = 10) -> str:
+    """Obtém uma página HTTP e converte o conteúdo principal para Markdown limpo.
+
+    Args:
+        url: URL HTTP ou HTTPS da página a extrair. Recursos locais, ficheiros
+            ``file://`` e outros esquemas são rejeitados.
+        timeout_seconds: Timeout da ligação e leitura, entre 1 e 30 segundos.
+
+    Returns:
+        JSON com URL final, título e conteúdo Markdown truncado a 12 000
+        caracteres. Scripts, estilos, navegação e elementos não informativos
+        são removidos antes da conversão.
+
+    Raises:
+        ValueError: Se o URL ou timeout forem inválidos.
+        TimeoutError: Se o servidor não responder dentro do limite.
+        RuntimeError: Se a página não puder ser descarregada.
+    """
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("O URL deve usar o esquema http ou https.")
+    if not 1 <= timeout_seconds <= 30:
+        raise ValueError("timeout_seconds deve estar entre 1 e 30.")
+
+    request = Request(
+        url,
+        headers={"User-Agent": "AI-Workspace/1.0 (+web-content-reader)"},
+    )
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            html = response.read(2_000_000).decode(
+                response.headers.get_content_charset() or "utf-8",
+                errors="replace",
+            )
+            final_url = response.geturl()
+    except TimeoutError as error:
+        raise TimeoutError(f"Timeout ao obter {url}") from error
+    except (HTTPError, URLError, OSError) as error:
+        raise RuntimeError(f"Falha ao obter {url}: {error}") from error
+
+    from bs4 import BeautifulSoup
+    from markdownify import markdownify
+
+    soup = BeautifulSoup(html, "html.parser")
+    for element in soup(["script", "style", "noscript", "nav", "footer", "header"]):
+        element.decompose()
+    main = soup.find("main") or soup.find("article") or soup.body or soup
+    content = markdownify(str(main), heading_style="ATX").strip()
+    content = "\n".join(line.rstrip() for line in content.splitlines())
+    return json.dumps(
+        {
+            "url": final_url,
+            "titulo": soup.title.get_text(" ", strip=True) if soup.title else "",
+            "conteudo_markdown": content[:MAX_SCRAPED_CONTENT],
+            "truncado": len(content) > MAX_SCRAPED_CONTENT,
+        },
+        ensure_ascii=False,
+    )

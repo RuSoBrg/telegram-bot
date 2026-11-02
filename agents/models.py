@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from domain.models import RequirementsContext
 from tools.code_tools import ler_ficheiro_codigo, listar_ficheiros_projeto
+from tools.data_tools import analisar_ficheiro_dados, executar_query_sql
 from tools.file_tools import (
     empacotar_artefactos,
     gerar_apresentacao_powerpoint,
@@ -29,7 +30,7 @@ from tools.file_tools import (
 )
 from tools.training_tools import validar_pacote_formacao
 from tools.validation_tools import validar_artefactos
-from tools.web_tools import pesquisar_web
+from tools.web_tools import pesquisar_web, raspar_pagina_web
 
 load_dotenv()
 
@@ -57,7 +58,7 @@ class QualityDecision(BaseModel):
 
 
 def tools_for(agent: str) -> list[BaseTool]:
-    common_research = [pesquisar_web]
+    common_research = [pesquisar_web, raspar_pagina_web]
     if agent == "formador":
         return [
             *common_research,
@@ -81,6 +82,8 @@ def tools_for(agent: str) -> list[BaseTool]:
     if agent == "engenharia":
         return [
             *common_research,
+            analisar_ficheiro_dados,
+            executar_query_sql,
             ler_ficheiro_codigo,
             listar_ficheiros_projeto,
             gerar_documento_excel,
