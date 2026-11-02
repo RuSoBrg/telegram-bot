@@ -26,6 +26,8 @@ model_list:
     litellm_params:
       model: gemini/gemini-1.5-pro
       api_key: os.environ/GEMINI_API_KEY
+      # Dedicated route for large-file processing (2M-token context).
+      request_timeout: 120
 
   # Marketing Agent: Flash and GPT-4o
   - model_name: marketing-model
@@ -62,7 +64,7 @@ router_settings:
         - file-reader-model
     - file-reader-model:
         - programmer-model
-        - marketing-flash
+        - supervisor-haiku
     - marketing-model:
         - marketing-gpt4o
         - marketing-flash

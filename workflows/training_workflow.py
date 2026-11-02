@@ -108,12 +108,12 @@ def build_training_workflow():
     builder.add_node(
         "formador",
         create_specialist_node("formador", "tools_formador", "validar_pacote"),
-        destinations=("tools_formador", "qualidade", "__end__"),
+        destinations=("tools_formador", "validar_pacote", "quality_reviewer"),
     )
     builder.add_node(
         "validar_pacote",
         lambda state: _package_command(require_training_package(state)),
-        destinations=("formador", "qualidade", "__end__"),
+        destinations=("formador", "quality_reviewer", "__end__"),
     )
     tool_node = ToolNode(tools_for("formador"))
     builder.add_node(
@@ -122,7 +122,7 @@ def build_training_workflow():
         destinations=("formador", "__end__"),
     )
     builder.add_node(
-        "qualidade",
+        "quality_reviewer",
         create_quality_node(
             load_runtime_limits().max_quality_iterations,
             target="formador",
