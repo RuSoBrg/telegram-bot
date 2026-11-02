@@ -1,9 +1,15 @@
 import json
+import ipaddress
 import os
+import socket
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.parse import urljoin, urlparse
+from urllib.request import (
+    HTTPRedirectHandler,
+    Request,
+    build_opener,
+)
 from typing import Any
 
 from langchain_core.tools import tool
@@ -25,6 +31,64 @@ RESEARCH_PROFILES = {
     "general": [],
 }
 MAX_SCRAPED_CONTENT = 12000
+_BLOCKED_HOSTNAMES = {"localhost", "localhost.localdomain", "metadata.google.internal"}
+
+
+def _validate_public_url(url: str) -> str:
+    """Validate a URL before any network request, including redirects."""
+    parsed = urlparse(url.strip())
+    hostname = parsed.hostname
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not hostname
+        or parsed.username
+        or parsed.password
+    ):
+        raise ValueError(
+            "O URL deve usar o esquema http ou https, conter um hostname "
+            "e não ter credenciais."
+        )
+
+    normalized_hostname = hostname.rstrip(".").lower()
+    if normalized_hostname in _BLOCKED_HOSTNAMES:
+        raise ValueError("O hostname solicitado não é permitido.")
+    try:
+        addresses = {
+            ipaddress.ip_address(result[4][0])
+            for result in socket.getaddrinfo(
+                normalized_hostname,
+                parsed.port or (443 if parsed.scheme == "https" else 80),
+                type=socket.SOCK_STREAM,
+            )
+        }
+    except (OSError, ValueError) as error:
+        raise ValueError("Não foi possível resolver o hostname solicitado.") from error
+    if not addresses or any(
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+        for address in addresses
+    ):
+        raise ValueError("O hostname solicitado resolve para uma rede não pública.")
+    return url.strip()
+
+
+class _PublicRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        request: Request,
+        file,
+        code: int,
+        msg: str,
+        headers,
+        newurl: str,
+    ) -> Request | None:
+        target = urljoin(request.full_url, newurl)
+        _validate_public_url(target)
+        return super().redirect_request(request, file, code, msg, headers, target)
 
 
 @tool
@@ -122,27 +186,26 @@ def raspar_pagina_web(url: str, timeout_seconds: int = 10) -> str:
         TimeoutError: Se o servidor não responder dentro do limite.
         RuntimeError: Se a página não puder ser descarregada.
     """
-    parsed = urlparse(url.strip())
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("O URL deve usar o esquema http ou https.")
     if not 1 <= timeout_seconds <= 30:
         raise ValueError("timeout_seconds deve estar entre 1 e 30.")
+    safe_url = _validate_public_url(url)
 
     request = Request(
-        url,
+        safe_url,
         headers={"User-Agent": "AI-Workspace/1.0 (+web-content-reader)"},
     )
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:
+        opener = build_opener(_PublicRedirectHandler)
+        with opener.open(request, timeout=timeout_seconds) as response:
             html = response.read(2_000_000).decode(
                 response.headers.get_content_charset() or "utf-8",
                 errors="replace",
             )
             final_url = response.geturl()
     except TimeoutError as error:
-        raise TimeoutError(f"Timeout ao obter {url}") from error
+        raise TimeoutError(f"Timeout ao obter {safe_url}") from error
     except (HTTPError, URLError, OSError) as error:
-        raise RuntimeError(f"Falha ao obter {url}: {error}") from error
+        raise RuntimeError(f"Falha ao obter {safe_url}: {error}") from error
 
     from bs4 import BeautifulSoup
     from markdownify import markdownify
