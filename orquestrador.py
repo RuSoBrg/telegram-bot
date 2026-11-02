@@ -75,14 +75,14 @@ async def _run_agent(
 ) -> dict[str, list[BaseMessage] | str]:
     """Invoca um especialista e executa as ferramentas que ele solicitar."""
 
-    primary, fallback = specialist_models(agent)
+    model = specialist_models(agent)
     tools = {tool.name: tool for tool in tools_for(agent)}
     messages = [
         SystemMessage(content=load_prompt(prompt_file)),
         *prepare_messages_for_model(list(state.get("messages", []))),
     ]
     try:
-        response = await primary.ainvoke(messages)
+        response = await model.ainvoke(messages)
         if not response.tool_calls:
             return {
                 "messages": [AIMessage(content=content_to_text(response.content))],
@@ -99,7 +99,7 @@ async def _run_agent(
                 ToolMessage(content=content_to_text(result), tool_call_id=call["id"])
             )
 
-        final_response = await primary.ainvoke([*messages, response, *tool_messages])
+        final_response = await model.ainvoke([*messages, response, *tool_messages])
         return {
             "messages": [
                 *tool_messages,
@@ -108,18 +108,11 @@ async def _run_agent(
             "status": "producing",
         }
     except Exception as error:
-        try:
-            response = await fallback.ainvoke(messages)
-        except Exception as fallback_error:
-            detail = f"{type(error).__name__}: {error}; fallback: {type(fallback_error).__name__}: {fallback_error}"
-            return {
-                "messages": [AIMessage(content=f"❌ O agente {agent} falhou: {detail}")],
-                "errors": [detail],
-                "status": "failed",
-            }
+        detail = f"{type(error).__name__}: {error}"
         return {
-            "messages": [AIMessage(content=content_to_text(response.content))],
-            "status": "producing",
+            "messages": [AIMessage(content=f"❌ O agente {agent} falhou: {detail}")],
+            "errors": [detail],
+            "status": "failed",
         }
 
 

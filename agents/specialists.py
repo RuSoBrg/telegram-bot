@@ -5,10 +5,7 @@ from langgraph.types import Command
 
 from agents.models import specialist_models
 from agents.runtime import (
-    PLAFOND_EXAUSTO_MESSAGE,
-    ProviderExhaustedError,
     content_to_text,
-    invoke_with_fallback,
     load_prompt,
     prepare_messages_for_model,
 )
@@ -31,7 +28,7 @@ def create_specialist_node(
     quality_node_name: str,
 ):
     """Create a specialist node with its dynamic role prompt and fallback model."""
-    primary, fallback = specialist_models(agent_name)
+    model = specialist_models(agent_name)
     label = AGENT_LABELS.get(agent_name, f"[{agent_name} / Gemini]")
     max_steps = load_runtime_limits().max_steps
 
@@ -71,11 +68,7 @@ def create_specialist_node(
                 agent=agent_name,
                 model=os.getenv("GEMINI_MODEL", "configured"),
             ):
-                response = invoke_with_fallback(
-                    primary,
-                    fallback,
-                    [SystemMessage(content=prompt)] + conversation,
-                )
+                response = model.invoke([SystemMessage(content=prompt)] + conversation)
         except Exception as error:
             detail = f"{type(error).__name__}: {error}"
             return Command(
@@ -84,9 +77,7 @@ def create_specialist_node(
                     "messages": [
                         AIMessage(
                             content=(
-                                PLAFOND_EXAUSTO_MESSAGE
-                                if isinstance(error, ProviderExhaustedError)
-                                else f"❌ {label} falhou e o workflow foi terminado.\nErro: {detail}"
+                                f"❌ {label} falhou e o workflow foi terminado.\nErro: {detail}"
                             )
                         )
                     ],

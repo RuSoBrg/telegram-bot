@@ -6,9 +6,6 @@ from langgraph.types import Command, interrupt
 
 from agents.models import quality_models, quality_tools
 from agents.runtime import (
-    PLAFOND_EXAUSTO_MESSAGE,
-    ProviderExhaustedError,
-    invoke_with_fallback,
     load_prompt,
     prepare_messages_for_model,
 )
@@ -83,7 +80,7 @@ def _quality_prompt(target: str, iteration: int) -> str:
     )
 
 
-def _run_reviewers(reviewer, reviewer_fallback, target, prompt, messages):
+def _run_reviewers(reviewer, target, prompt, messages):
     decisions = []
     for role, prompt_file in _reviewer_specs(target):
         role_messages = [
@@ -94,7 +91,7 @@ def _run_reviewers(reviewer, reviewer_fallback, target, prompt, messages):
                 + load_prompt(prompt_file)
             )
         ] + messages[1:]
-        decisions.append(invoke_with_fallback(reviewer, reviewer_fallback, role_messages))
+        decisions.append(reviewer.invoke(role_messages))
     return decisions
 
 
@@ -201,7 +198,7 @@ def create_quality_node(
     target: str = "formador",
     approved_target: str = "__end__",
 ):
-    reviewer, reviewer_fallback, research, research_fallback = quality_models()
+    reviewer, research = quality_models()
 
     def quality_node(state: WorkflowState):
         iteration = state.get("quality_iterations", 0)
@@ -215,7 +212,7 @@ def create_quality_node(
             list(state["messages"])
         )
         try:
-            research_response = invoke_with_fallback(research, research_fallback, messages)
+            research_response = research.invoke(messages)
             if research_response.tool_calls:
                 messages.append(research_response)
                 for call in research_response.tool_calls:
@@ -232,23 +229,10 @@ def create_quality_node(
                     result = tool.invoke(call["args"])
                     messages.append(ToolMessage(content=result, tool_call_id=call["id"]))
             reviewer_decisions = _run_reviewers(
-                reviewer, reviewer_fallback, target, prompt, messages
+                reviewer, target, prompt, messages
             )
         except Exception as error:
             detail = f"{type(error).__name__}: {error}"
-            if isinstance(error, ProviderExhaustedError):
-                return Command(
-                    goto="__end__",
-                    update={
-                        "messages": [ToolMessage(
-                            content=PLAFOND_EXAUSTO_MESSAGE,
-                            tool_call_id="quality-provider-exhausted",
-                        )],
-                        "status": "failed",
-                        "errors": [detail],
-                        "quality_iterations": iteration + 1,
-                    },
-                )
             return _failure_command(detail, iteration)
         report, feedback = _review_report(reviewer_decisions, validation)
         result = {

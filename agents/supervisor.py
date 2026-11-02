@@ -2,7 +2,7 @@ from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.types import Command
 
 from agents.models import supervisor_model
-from agents.runtime import PLAFOND_EXAUSTO_MESSAGE, load_prompt, invoke_with_fallback
+from agents.runtime import PLAFOND_EXAUSTO_MESSAGE, load_prompt
 from domain.state import WorkflowState
 from domain.limits import load_runtime_limits
 
@@ -33,7 +33,7 @@ def create_supervisor_node():
             )
         ] + state.get("messages", [])
         try:
-            decision = invoke_with_fallback(model, None, messages)
+            decision = model.invoke(messages)
         except Exception as error:
             detail = str(error)
             return Command(
