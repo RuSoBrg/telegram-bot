@@ -39,7 +39,7 @@ def create_specialist_node(
         steps = state.get("steps", 0)
         if steps >= max_steps:
             return Command(
-                goto=quality_node_name,
+                goto="quality_reviewer",
                 update={
                     "steps": steps,
                     "status": "failed",
@@ -79,7 +79,7 @@ def create_specialist_node(
         except Exception as error:
             detail = f"{type(error).__name__}: {error}"
             return Command(
-                goto="__end__",
+                goto=quality_node_name,
                 update={
                     "messages": [
                         AIMessage(

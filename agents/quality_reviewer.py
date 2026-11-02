@@ -160,7 +160,15 @@ def _review_report(reviewer_decisions, validation):
     )
 
 
-def _approved_command(state, target, report, artifacts, sources, result):
+def _approved_command(
+    state,
+    target,
+    report,
+    artifacts,
+    sources,
+    result,
+    approved_target: str,
+):
     if state.get("plan"):
         current = state.get("current_plan_step", 0)
         result["completed_plan_steps"] = [
@@ -182,10 +190,17 @@ def _approved_command(state, target, report, artifacts, sources, result):
                 goto=target,
                 update={**result, "status": "rejected", "quality_feedback": "Pacote rejeitado."},
             )
-    return Command(goto="__end__", update={**result, "status": "approved", "quality_feedback": ""})
+    return Command(
+        goto=approved_target,
+        update={**result, "status": "approved", "quality_feedback": ""},
+    )
 
 
-def create_quality_node(max_iterations: int, target: str = "formador"):
+def create_quality_node(
+    max_iterations: int,
+    target: str = "formador",
+    approved_target: str = "__end__",
+):
     reviewer, reviewer_fallback, research, research_fallback = quality_models()
 
     def quality_node(state: WorkflowState):
@@ -245,7 +260,15 @@ def create_quality_node(max_iterations: int, target: str = "formador"):
             "approval_required": False,
         }
         if report.approved:
-            return _approved_command(state, target, report, artifacts, sources, result)
+            return _approved_command(
+                state,
+                target,
+                report,
+                artifacts,
+                sources,
+                result,
+                approved_target,
+            )
         return Command(
             goto=target,
             update={

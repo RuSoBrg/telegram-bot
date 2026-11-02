@@ -37,7 +37,7 @@ def create_supervisor_node():
         except Exception as error:
             detail = str(error)
             return Command(
-                goto="__end__",
+                goto="quality_reviewer",
                 update={
                     "status": "failed",
                     "steps": steps + 1,

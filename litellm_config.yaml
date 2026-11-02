@@ -60,7 +60,8 @@ model_list:
 
 router_settings:
   routing_strategy: simple-shuffle
-  num_retries: 1
+  # Fail over immediately for exhausted or invalid credentials.
+  num_retries: 0
   retry_after: 2
   timeout: 60
   allowed_fails: 2
@@ -76,8 +77,9 @@ router_settings:
     - marketing-model:
         - marketing-gemini
   retry_policy:
-    RateLimitErrorRetries: 3
-    TimeoutErrorRetries: 2
+    RateLimitErrorRetries: 0
+    AuthenticationErrorRetries: 0
+    TimeoutErrorRetries: 1
     InternalServerErrorRetries: 2
 
 general_settings:

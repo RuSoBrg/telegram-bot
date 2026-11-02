@@ -141,6 +141,6 @@ def _package_command(state: WorkflowState):
     if state.get("status") == "failed":
         return Command(goto="quality_reviewer", update=state)
     return Command(
-        goto="formador" if state.get("quality_feedback") else "qualidade",
+        goto="formador" if state.get("quality_feedback") else "quality_reviewer",
         update=state,
     )

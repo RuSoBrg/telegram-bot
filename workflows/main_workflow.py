@@ -66,7 +66,7 @@ def build_workflow(
             builder.add_node(
                 agent,
                 create_specialist_node(agent, tools_target, f"qualidade_{agent}"),
-                destinations=(tools_target, f"qualidade_{agent}"),
+                destinations=(tools_target, f"qualidade_{agent}", "quality_reviewer"),
             )
             tool_node = ToolNode(tools_for(agent))
             if agent == "engenharia":
@@ -87,12 +87,14 @@ def build_workflow(
                 create_quality_node(
                     quality_limits,
                     target=agent,
+                    approved_target="quality_reviewer",
                 ),
                 destinations=(agent,),
             )
 
     builder.add_edge(START, "enforce_quota")
     builder.add_edge("enforce_quota", "supervisor")
+    builder.add_edge("training_workflow", "quality_reviewer")
 
     saver = checkpointer or get_checkpoint_saver(fallback_to_memory=True)
     return builder.compile(

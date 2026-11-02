@@ -27,7 +27,7 @@ from domain.events import iter_app_events
 from domain.models import ArtifactRecord, WorkflowRun, WorkflowStatus
 from domain.observability import log_event, timed_event
 from domain.persistence import WorkflowStore
-from agents.runtime import PLAFOND_EXAUSTO_MESSAGE
+from agents.runtime import PLAFOND_EXAUSTO_MESSAGE, ProviderExhaustedError
 from graph import grafo
 from workflows.main_workflow import GRAPH_RECURSION_LIMIT
 from tools.file_tools import store as object_store
@@ -218,7 +218,8 @@ async def _run_graph_events(
                 chat_id=update.effective_chat.id,
                 text=(
                     PLAFOND_EXAUSTO_MESSAGE
-                    if "plafond" in str(error).lower()
+                    if isinstance(error, ProviderExhaustedError)
+                    or "plafond" in str(error).lower()
                     else "❌ O workflow terminou com erro. Tenta novamente mais tarde."
                 ),
             )

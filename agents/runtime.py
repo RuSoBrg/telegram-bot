@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 logger = logging.getLogger(__name__)
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 PLAFOND_EXAUSTO_MESSAGE = (
-    "Neste momento esgotei o meu plafond nos fornecedores principais. "
+    "Fiquei sem plafond nos meus fornecedores principais de IA. "
     "Retomarei o serviço a 100% no início do próximo ciclo. Por favor, "
     "tenta um pedido mais simples amanhã."
 )
