@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WorkflowStatus(StrEnum):
@@ -69,6 +69,12 @@ class TrainingPackage(BaseModel):
 
 
 class RequirementsContext(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "required": ["objective", "audience", "constraints"],
+            "additionalProperties": False,
+        }
+    )
     objective: str = ""
     audience: str = ""
     constraints: list[str] = Field(default_factory=list)
