@@ -13,6 +13,7 @@ model_list:
     model_info:
       model_group: supervisor-model
       quality_score: 100
+      order: 1
 
   - model_name: supervisor-model
     litellm_params:
@@ -21,6 +22,7 @@ model_list:
     model_info:
       model_group: supervisor-model
       quality_score: 92
+      order: 2
 
   - model_name: supervisor-model
     litellm_params:
@@ -29,15 +31,18 @@ model_list:
     model_info:
       model_group: supervisor-model
       quality_score: 80
+      order: 3
 
   # Programmer pool: choose among capable providers at runtime.
   - model_name: programmer-model
     litellm_params:
-      model: openrouter/anthropic/claude-3.5-sonnet
+      # OpenRouter resolves this to a currently available tool-capable model.
+      model: openrouter/auto
       api_key: os.environ/OPENROUTER_API_KEY
     model_info:
       model_group: programmer-model
       quality_score: 100
+      order: 1
 
   - model_name: programmer-model
     litellm_params:
@@ -48,6 +53,25 @@ model_list:
     model_info:
       model_group: programmer-model
       quality_score: 92
+      order: 2
+
+  - model_name: programmer-model
+    litellm_params:
+      model: groq/llama-3.1-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+    model_info:
+      model_group: programmer-model
+      quality_score: 86
+      order: 3
+
+  - model_name: programmer-model
+    litellm_params:
+      model: gemini/gemini-1.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+    model_info:
+      model_group: programmer-model
+      quality_score: 78
+      order: 4
 
   # Large-file pool: choose a healthy long-context deployment at runtime.
   - model_name: file-reader-model
@@ -58,6 +82,7 @@ model_list:
     model_info:
       model_group: file-reader-model
       quality_score: 100
+      order: 1
 
   - model_name: file-reader-model
     litellm_params:
@@ -68,6 +93,7 @@ model_list:
     model_info:
       model_group: file-reader-model
       quality_score: 92
+      order: 2
 
   # Marketing pool: choose the highest-capability currently available model.
   - model_name: marketing-model
@@ -77,6 +103,7 @@ model_list:
     model_info:
       model_group: marketing-model
       quality_score: 82
+      order: 2
 
   - model_name: marketing-model
     litellm_params:
@@ -85,6 +112,7 @@ model_list:
     model_info:
       model_group: marketing-model
       quality_score: 88
+      order: 1
 
 router_settings:
   # The application selects by quality_score; this recognized strategy keeps
@@ -97,6 +125,7 @@ router_settings:
     - file-reader-model
     - marketing-model
   num_retries: 0
+  max_fallbacks: 8
   retry_after: 2
   timeout: 60
   allowed_fails: 2

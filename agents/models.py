@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -36,6 +37,7 @@ load_dotenv()
 
 LITELLM_CONFIG_PATH = Path(__file__).resolve().parent.parent / "litellm_config.yaml"
 _ENV_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)(?::-(.*?))?\}")
+logger = logging.getLogger(__name__)
 
 
 class RoutingDecision(BaseModel):
@@ -76,6 +78,55 @@ def _quality_first_deployment(deployments: list[dict[str, Any]]) -> dict[str, An
 
 class QualityFirstRouter(Router):
     """LiteLLM Router variant that prefers capability over latency."""
+
+    def deployment_callback_on_failure(
+        self,
+        kwargs: dict[str, Any],
+        completion_response: Any,
+        start_time: Any,
+        end_time: Any,
+    ) -> bool:
+        """Log the next quality-ranked deployment before LiteLLM fails over."""
+        params = kwargs.get("litellm_params", {})
+        failed_model = str(params.get("model", "unknown"))
+        model_group = str(
+            kwargs.get("model")
+            or params.get("model_name")
+            or kwargs.get("model_group")
+            or "unknown"
+        )
+        deployments = self.get_model_list(model_name=model_group) or []
+        ordered = sorted(
+            deployments,
+            key=lambda deployment: int(
+                deployment.get("model_info", {}).get("order", 999)
+            ),
+        )
+        failed_id = (kwargs.get("model_info") or {}).get("id")
+        next_model = next(
+            (
+                str(candidate.get("litellm_params", {}).get("model", "unknown"))
+                for candidate in ordered
+                if (candidate.get("model_info") or {}).get("id") != failed_id
+            ),
+            None,
+        )
+        if next_model:
+            logger.warning(
+                "Falha no provedor principal %s. A iniciar fallback para %s.",
+                failed_model,
+                next_model,
+            )
+        else:
+            logger.error(
+                "Falha no provedor %s e não existem deployments alternativos "
+                "configurados para %s.",
+                failed_model,
+                model_group,
+            )
+        return super().deployment_callback_on_failure(
+            kwargs, completion_response, start_time, end_time
+        )
 
     def _select_deployment_sync(
         self,
@@ -198,14 +249,17 @@ def _router() -> Router:
         for key in (
             "routing_strategy",
             "num_retries",
+            "max_fallbacks",
             "retry_after",
             "timeout",
             "allowed_fails",
             "cooldown_time",
+            "retry_policy",
             "context_window_fallbacks",
             "enable_health_check_routing",
             "health_check_staleness_threshold",
             "background_health_check_model_groups",
+            "enable_weighted_failover",
         )
         if key in router_settings
     }
