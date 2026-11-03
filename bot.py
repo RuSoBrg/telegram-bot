@@ -404,6 +404,7 @@ async def _lifespan(_: FastAPI):
     await telegram_application.initialize()
     await telegram_application.start()
     base_url = os.getenv("TELEGRAM_WEBHOOK_BASE_URL", "").strip().rstrip("/")
+    polling_started = False
     if base_url:
         webhook_url = f"{base_url}{WEBHOOK_PATH}"
         logger.info("A configurar Webhook do Telegram em: %s", webhook_url)
@@ -413,9 +414,20 @@ async def _lifespan(_: FastAPI):
             drop_pending_updates=True,
         )
         logger.info("Webhook configurado com sucesso!")
+    else:
+        logger.info(
+            "TELEGRAM_WEBHOOK_BASE_URL não configurado; a iniciar polling do Telegram."
+        )
+        await telegram_application.bot.delete_webhook(drop_pending_updates=True)
+        if telegram_application.updater is None:
+            raise RuntimeError("Updater do Telegram não está disponível para polling.")
+        await telegram_application.updater.start_polling(drop_pending_updates=True)
+        polling_started = True
     try:
         yield
     finally:
+        if polling_started and telegram_application.updater is not None:
+            await telegram_application.updater.stop()
         await telegram_application.stop()
         await telegram_application.shutdown()
         grafo = None
