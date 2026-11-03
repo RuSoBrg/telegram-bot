@@ -17,7 +17,7 @@ COPY --from=uv /uv /uvx /bin/
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-build --no-install-project
 
-COPY app.py ./
+COPY app.py bot.py ./
 COPY agents ./agents
 COPY domain ./domain
 COPY prompts ./prompts
@@ -27,6 +27,7 @@ COPY graph.py ./
 COPY litellm_config.yaml ./
 
 RUN uv sync --locked --no-dev --no-build --no-install-project \
+    && test -f /app/bot.py \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser \
     && mkdir -p /app/data \
     && chown -R appuser:appuser /app

@@ -1,5 +1,6 @@
-# Runtime capability pools. Deployments with the same model_name form a pool;
-# LiteLLM chooses the currently healthy/lowest-latency deployment at request time.
+# Runtime capability pools. Deployments with the same model_name form a pool.
+# quality_score expresses capability, while health/cooldown state is evaluated
+# at request time. Higher quality_score wins among currently available models.
 
 model_list:
   # Supervisor pool: all configured providers are eligible at runtime.
@@ -9,6 +10,9 @@ model_list:
       api_key: os.environ/AZURE_OPENAI_API_KEY
       api_base: os.environ/AZURE_OPENAI_ENDPOINT
       api_version: os.environ/AZURE_OPENAI_API_VERSION
+    model_info:
+      model_group: supervisor-model
+      quality_score: 100
 
   - model_name: supervisor-model
     litellm_params:
@@ -16,6 +20,7 @@ model_list:
       api_key: os.environ/GROQ_API_KEY
     model_info:
       model_group: supervisor-model
+      quality_score: 92
 
   - model_name: supervisor-model
     litellm_params:
@@ -23,12 +28,16 @@ model_list:
       api_key: os.environ/OPENROUTER_API_KEY
     model_info:
       model_group: supervisor-model
+      quality_score: 80
 
   # Programmer pool: choose among capable providers at runtime.
   - model_name: programmer-model
     litellm_params:
       model: openrouter/anthropic/claude-3.5-sonnet
       api_key: os.environ/OPENROUTER_API_KEY
+    model_info:
+      model_group: programmer-model
+      quality_score: 100
 
   - model_name: programmer-model
     litellm_params:
@@ -38,6 +47,7 @@ model_list:
       api_version: os.environ/AZURE_OPENAI_API_VERSION
     model_info:
       model_group: programmer-model
+      quality_score: 92
 
   # Large-file pool: choose a healthy long-context deployment at runtime.
   - model_name: file-reader-model
@@ -45,6 +55,9 @@ model_list:
       model: gemini/gemini-1.5-pro
       api_key: os.environ/GEMINI_API_KEY
       request_timeout: 120
+    model_info:
+      model_group: file-reader-model
+      quality_score: 100
 
   - model_name: file-reader-model
     litellm_params:
@@ -54,12 +67,16 @@ model_list:
       api_version: os.environ/AZURE_OPENAI_API_VERSION
     model_info:
       model_group: file-reader-model
+      quality_score: 92
 
-  # Marketing pool: choose the currently available fast deployment.
+  # Marketing pool: choose the highest-capability currently available model.
   - model_name: marketing-model
     litellm_params:
       model: groq/llama-3.1-70b-versatile
       api_key: os.environ/GROQ_API_KEY
+    model_info:
+      model_group: marketing-model
+      quality_score: 82
 
   - model_name: marketing-model
     litellm_params:
@@ -67,10 +84,11 @@ model_list:
       api_key: os.environ/GEMINI_API_KEY
     model_info:
       model_group: marketing-model
+      quality_score: 88
 
 router_settings:
-  routing_strategy: latency-based-routing
-  # Health and latency are evaluated continuously; no fixed provider ranking.
+  # The application selects by quality_score; this recognized strategy keeps
+  # LiteLLM's health, cooldown, and retry machinery enabled.
   enable_health_check_routing: true
   health_check_staleness_threshold: 60
   background_health_check_model_groups:

@@ -57,6 +57,53 @@ class QualityDecision(BaseModel):
     verified_sources: list[dict] = Field(default_factory=list)
 
 
+def _quality_first_deployment(deployments: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the highest-capability healthy deployment.
+
+    LiteLLM has no native quality-first strategy. The Router still supplies
+    this method with deployments that passed its availability, cooldown, and
+    health filters, so sorting here keeps fallback behavior intact.
+    """
+    if not deployments:
+        return None
+    return max(
+        deployments,
+        key=lambda deployment: int(
+            deployment.get("model_info", {}).get("quality_score", 0)
+        ),
+    )
+
+
+class QualityFirstRouter(Router):
+    """LiteLLM Router variant that prefers capability over latency."""
+
+    def _select_deployment_sync(
+        self,
+        *,
+        strategy: str | None,
+        selector: Any | None,
+        model: str,
+        healthy_deployments: list,
+        messages: list[dict[str, str]] | None,
+        input: str | list | None,
+        request_kwargs: dict | None,
+    ) -> Any | None:
+        return _quality_first_deployment(healthy_deployments)
+
+    async def _select_deployment_async(
+        self,
+        *,
+        strategy: str | None,
+        selector: Any | None,
+        model: str,
+        healthy_deployments: list,
+        messages: list[dict[str, str]] | None,
+        input: str | list | None,
+        request_kwargs: dict | None,
+    ) -> Any | None:
+        return _quality_first_deployment(healthy_deployments)
+
+
 def tools_for(agent: str) -> list[BaseTool]:
     common_research = [pesquisar_web, raspar_pagina_web]
     if agent == "formador":
@@ -162,8 +209,11 @@ def _router() -> Router:
         )
         if key in router_settings
     }
-    return Router(
+    return QualityFirstRouter(
         model_list=_configured_deployments(model_list),
+        # A recognized strategy keeps LiteLLM's normal health/cooldown path
+        # active; QualityFirstRouter replaces its deployment ordering.
+        routing_strategy="least-busy",
         **supported_settings,
     )
 
