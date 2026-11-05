@@ -25,8 +25,8 @@ COPY domain ./domain
 COPY prompts ./prompts
 COPY tools ./tools
 COPY workflows ./workflows
+COPY routing ./routing
 COPY graph.py ./
-COPY litellm_config.yaml ./
 
 RUN uv sync --locked --no-dev --no-build --no-install-project \
     && test -f /app/bot.py \

@@ -32,8 +32,14 @@ def log_event(event: str, *, request_id: str = "", **fields: Any) -> None:
 
 @contextmanager
 def timed_event(event: str, *, request_id: str = "", **fields: Any):
+    def resolved_fields() -> dict[str, Any]:
+        return {
+            key: value() if callable(value) else value
+            for key, value in fields.items()
+        }
+
     started = time.monotonic()
-    log_event(f"{event}_started", request_id=request_id, **fields)
+    log_event(f"{event}_started", request_id=request_id, **resolved_fields())
     try:
         yield
     except Exception as error:
@@ -42,7 +48,7 @@ def timed_event(event: str, *, request_id: str = "", **fields: Any):
             request_id=request_id,
             duration_ms=round((time.monotonic() - started) * 1000),
             error_type=type(error).__name__,
-            **fields,
+            **resolved_fields(),
         )
         raise
     else:
@@ -50,5 +56,5 @@ def timed_event(event: str, *, request_id: str = "", **fields: Any):
             f"{event}_completed",
             request_id=request_id,
             duration_ms=round((time.monotonic() - started) * 1000),
-            **fields,
+            **resolved_fields(),
         )

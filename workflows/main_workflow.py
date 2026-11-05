@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -17,9 +18,15 @@ from domain.state import WorkflowState
 from workflows.training_workflow import build_training_workflow
 
 
-AGENTS = ("marketing", "engenharia", "vida", "formador")
+AGENTS = ("marketing", "engenharia", "vida", "formador", "generalista")
 MAX_GRAPH_STEPS = 5
-GRAPH_RECURSION_LIMIT = 5
+GRAPH_RECURSION_LIMIT = 30
+
+
+def _interrupt_before_nodes() -> list[str]:
+    if os.getenv("REQUIRE_HUMAN_APPROVAL", "true").lower() == "true":
+        return ["tools_engenharia"]
+    return []
 
 
 def build_workflow(
@@ -36,6 +43,7 @@ def build_workflow(
             "engenharia",
             "vida",
             "training_workflow",
+            "generalista",
             "quality_reviewer",
         ),
     )
@@ -91,7 +99,7 @@ def build_workflow(
     saver = checkpointer or create_checkpoint_saver()
     return builder.compile(
         checkpointer=saver,
-        interrupt_before=["tools_engenharia", "quality_reviewer"],
+        interrupt_before=_interrupt_before_nodes(),
     )
 
 

@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 from graph import grafo
+from workflows.main_workflow import GRAPH_RECURSION_LIMIT
 from domain.models import WorkflowRun, WorkflowStatus
 from domain.persistence import WorkflowStore
 from domain.events import iter_app_events
@@ -32,7 +33,7 @@ if "approval_required" not in st.session_state:
 
 config = {
     "configurable": {"thread_id": st.session_state.thread_id},
-    "recursion_limit": 5,
+    "recursion_limit": GRAPH_RECURSION_LIMIT,
 }
 
 # Mostrar mensagens anteriores na UI

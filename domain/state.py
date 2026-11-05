@@ -27,3 +27,5 @@ class WorkflowState(TypedDict, total=False):
     quality_iterations: int
     steps: int
     approval_decision: str
+    agent_used: str
+    model_used: str

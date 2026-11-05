@@ -95,7 +95,19 @@ def _run_reviewers(reviewer, target, prompt, messages):
     return decisions
 
 
-def _failure_command(detail: str, iteration: int) -> Command:
+def _last_useful_message(state: WorkflowState) -> AIMessage:
+    for message in reversed(state.get("messages", [])):
+        content = getattr(message, "content", "")
+        if isinstance(message, AIMessage) and isinstance(content, str) and content.strip():
+            return AIMessage(
+                content=f"{content}\n\n⚠️ Revisão automática não concluída."
+            )
+    return AIMessage(content="⚠️ Revisão automática não concluída.")
+
+
+def _failure_command(
+    detail: str, iteration: int, state: WorkflowState | None = None
+) -> Command:
     report = ReviewResult(
         approved=False,
         score=0,
@@ -104,12 +116,7 @@ def _failure_command(detail: str, iteration: int) -> Command:
     return Command(
         goto="__end__",
         update={
-            "messages": [
-                ToolMessage(
-                    content=f"❌ A supervisão falhou e o workflow foi terminado. Erro: {detail}",
-                    tool_call_id="quality-error",
-                )
-            ],
+            "messages": [_last_useful_message(state or {})],
             "quality_report": report,
             "quality_feedback": "",
             "quality_iterations": iteration + 1,
@@ -119,12 +126,12 @@ def _failure_command(detail: str, iteration: int) -> Command:
     )
 
 
-def _limit_command(max_iterations: int, iteration: int) -> Command:
+def _limit_command(max_iterations: int, iteration: int, state: WorkflowState) -> Command:
     detail = f"A revisão excedeu o limite de {max_iterations} iterações."
     return Command(
         goto="__end__",
         update={
-            "messages": [ToolMessage(content=f"❌ {detail}", tool_call_id="quality-limit")],
+            "messages": [_last_useful_message(state)],
             "quality_feedback": "",
             "status": "failed",
             "quality_iterations": iteration,
@@ -243,7 +250,7 @@ def create_quality_node(
             )
         iteration = state.get("quality_iterations", 0)
         if iteration >= max_iterations:
-            return _limit_command(max_iterations, iteration)
+            return _limit_command(max_iterations, iteration, state)
 
         artifacts, sources = _observations(state.get("messages", []))
         validation = _validation_result(artifacts)
@@ -273,7 +280,7 @@ def create_quality_node(
             )
         except Exception as error:
             detail = f"{type(error).__name__}: {error}"
-            return _failure_command(detail, iteration)
+            return _failure_command(detail, iteration, state)
         report, feedback = _review_report(reviewer_decisions, validation)
         result = {
             "quality_report": report,

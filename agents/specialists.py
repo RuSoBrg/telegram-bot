@@ -1,5 +1,3 @@
-import os
-
 from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.types import Command
 
@@ -15,10 +13,11 @@ from domain.state import WorkflowState
 
 
 AGENT_LABELS = {
-    "marketing": "🎬 [CMO / Gemini]",
-    "vida": "🏠 [COO Vida / Gemini]",
-    "engenharia": "💻 [CTO / Gemini]",
-    "formador": "🎓 [FORMADOR / Gemini]",
+    "marketing": "🎬 [CMO]",
+    "vida": "🏠 [COO Vida]",
+    "engenharia": "💻 [CTO]",
+    "formador": "🎓 [FORMADOR]",
+    "generalista": "🧭 [GENERALISTA]",
 }
 
 
@@ -29,7 +28,7 @@ def create_specialist_node(
 ):
     """Create a specialist node with its dynamic role prompt and fallback model."""
     model = specialist_models(agent_name)
-    label = AGENT_LABELS.get(agent_name, f"[{agent_name} / Gemini]")
+    label = AGENT_LABELS.get(agent_name, f"[{agent_name}]")
     max_steps = load_runtime_limits().max_steps
 
     def specialist_node(state: WorkflowState):
@@ -66,9 +65,11 @@ def create_specialist_node(
                 "agent_invocation",
                 request_id=state.get("request_id", ""),
                 agent=agent_name,
-                model=os.getenv("GEMINI_MODEL", "configured"),
+                model=lambda: getattr(model, "last_model", "router"),
             ):
                 response = model.invoke([SystemMessage(content=prompt)] + conversation)
+            model_used = response.additional_kwargs.get("model_used", "local-fallback")
+            label = f"{AGENT_LABELS.get(agent_name, f'[{agent_name}]')} / {model_used}"
         except Exception as error:
             detail = f"{type(error).__name__}: {error}"
             return Command(
@@ -94,6 +95,8 @@ def create_specialist_node(
                     "messages": [response],
                     "status": "producing",
                     "steps": steps + 1,
+                    "agent_used": agent_name,
+                    "model_used": model_used,
                 },
             )
         return Command(
@@ -104,6 +107,8 @@ def create_specialist_node(
                 ],
                 "status": "reviewing",
                 "steps": steps + 1,
+                "agent_used": agent_name,
+                "model_used": model_used,
             },
         )
 

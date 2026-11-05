@@ -2,15 +2,17 @@ import asyncio
 import hmac
 import logging
 import os
+import sqlite3
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator, Mapping
+from datetime import datetime, timezone
 from typing import Annotated, Any
 from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 import uvicorn
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
 from telegram import Update
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -34,6 +36,10 @@ from agents.runtime import PLAFOND_EXAUSTO_MESSAGE, ProviderExhaustedError
 from workflows.main_workflow import GRAPH_RECURSION_LIMIT
 from workflows.main_workflow import build_async_workflow
 from tools.file_tools import store as object_store
+from psycopg import Error as PsycopgError
+from routing.availability import AvailabilityStore
+from routing.alerts import configure_alert_sender
+from routing.catalog import load_catalog
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -46,6 +52,88 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 workflow_store = WorkflowStore()
 artifact_store = ArtifactVersionStore()
 grafo: Any | None = None
+_availability_cleanup_task: asyncio.Task | None = None
+
+
+def _allowed_user_ids() -> set[int]:
+    values = {
+        item.strip()
+        for item in os.getenv("ALLOWED_USER_IDS", "").split(",")
+        if item.strip()
+    }
+    try:
+        return {int(item) for item in values}
+    except ValueError:
+        logger.warning("ALLOWED_USER_IDS contém valores inválidos; estes serão ignorados.")
+        return {int(item) for item in values if item.isdigit()}
+
+
+def _is_authorized(update: Update) -> bool:
+    allowed = _allowed_user_ids()
+    if not allowed:
+        logger.warning("ALLOWED_USER_IDS está vazio; /estado fica acessível a todos.")
+        return True
+    user = update.effective_user
+    return bool(user and user.id in allowed)
+
+
+def _format_availability(value: Any) -> str:
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone().strftime("%d/%m %H:%M")
+
+
+def _state_text() -> str:
+    store = AvailabilityStore()
+    status_by_model = {
+        (item["provider"], item["model"]): item
+        for item in store.snapshot()
+    }
+    lines = ["📊 Estado dos modelos"]
+    for agent, entries in load_catalog().items():
+        lines.append(f"\n{agent}:")
+        for entry in entries:
+            item = status_by_model.get((entry.provider, entry.model))
+            if item and not store.is_available(entry.provider, entry.model):
+                lines.append(
+                    f"• {entry.model_id} — ⏳ volta a "
+                    f"{_format_availability(item['unavailable_until'])} "
+                    f"({item.get('reason') or 'indisponível'})"
+                )
+            else:
+                lines.append(f"• {entry.model_id} — ✅ disponível")
+    return "\n".join(lines)
+
+
+async def estado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_authorized(update):
+        if update.effective_chat:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Não tens autorização para consultar o estado dos modelos.",
+            )
+        return
+    if update.effective_chat:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=_state_text(),
+        )
+
+
+async def _cleanup_availability_periodically() -> None:
+    while True:
+        await asyncio.sleep(300)
+        try:
+            cleared = await asyncio.to_thread(
+                AvailabilityStore().clear_expired
+            )
+        except (OSError, sqlite3.Error, PsycopgError) as error:
+            logger.warning("Não foi possível limpar cooldowns expirados: %s", error)
+            continue
+        if cleared:
+            logger.info("Foram removidos %d cooldowns expirados.", cleared)
 
 
 def _workflow_status(
@@ -120,10 +208,9 @@ async def _send_workflow_message(
     response: str | None,
     approval_required: bool,
     errors: list[Any],
+    latest_state: Mapping[str, Any],
 ) -> None:
-    failed = latest_state.get("status") == "failed" or bool(
-        latest_state.get("errors")
-    )
+    failed = latest_state.get("status") == "failed" or bool(errors)
     if approval_required and not failed:
         await context.bot.send_message(
             chat_id=chat_id,
@@ -141,11 +228,65 @@ async def _send_workflow_message(
                 ]
             ),
         )
-    elif response:
-        for index in range(0, len(response), 4000):
-            await context.bot.send_message(chat_id=chat_id, text=response[index : index + 4000])
     else:
-        await context.bot.send_message(chat_id=chat_id, text=PLAFOND_EXAUSTO_MESSAGE)
+        text = _best_available_text(
+            latest_state,
+            errors[0] if errors else None,
+            response=response,
+        )
+        text = _with_model_footer(text, latest_state)
+        for index in range(0, len(text), 4000):
+            await context.bot.send_message(chat_id=chat_id, text=text[index : index + 4000])
+
+
+def _with_model_footer(text: str, latest_state: Mapping[str, Any]) -> str:
+    if os.getenv("SHOW_MODEL_FOOTER", "true").lower() not in {"1", "true", "yes", "on"}:
+        return text
+    if "— " in text[-120:]:
+        return text
+    agent = latest_state.get("agent_used") or latest_state.get("next_agent")
+    model = latest_state.get("model_used")
+    if not agent or not model:
+        return text
+    return f"{text.rstrip()}\n\n— {agent} · {model}"
+
+
+def _best_available_text(
+    latest_state: Mapping[str, Any],
+    error: Any = None,
+    *,
+    response: str | None = None,
+) -> str:
+    """Choose a useful final response, including when a workflow failed."""
+    candidates = [response, latest_state.get("response"), latest_state.get("final_response")]
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate
+
+    for message in reversed(latest_state.get("messages") or []):
+        if isinstance(message, AIMessage):
+            content = message.content
+        elif isinstance(message, Mapping):
+            if message.get("role") not in {"assistant", "ai"}:
+                continue
+            content = message.get("content")
+        else:
+            continue
+        if isinstance(content, str) and content.strip():
+            return content
+
+    request = latest_state.get("objective") or latest_state.get("request")
+    if not request:
+        for message in latest_state.get("messages") or []:
+            if isinstance(message, HumanMessage) and isinstance(message.content, str):
+                request = message.content
+                break
+    request = request or "o teu pedido"
+    detail = str(error).strip() if error is not None and str(error).strip() else "uma falha inesperada"
+    return (
+        f"⚠️ Não consegui concluir «{request}». "
+        f"Ocorreu {detail}. Podes tentar novamente com o mesmo pedido."
+    )
 
 
 async def _send_artifacts(context, chat_id: int, artifacts: list[dict]) -> None:
@@ -189,6 +330,7 @@ async def _send_graph_events(
         resposta_final,
         approval_required,
         latest_state.get("errors", []),
+        latest_state,
     )
 
     if approval_required:
@@ -247,11 +389,26 @@ async def _run_graph_events(
         if update.effective_chat:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=(
-                    PLAFOND_EXAUSTO_MESSAGE
-                    if isinstance(error, ProviderExhaustedError)
-                    or "plafond" in str(error).lower()
-                    else "❌ O workflow terminou com erro. Tenta novamente mais tarde."
+                text=_best_available_text(
+                    {
+                        "objective": (
+                            graph_input.get("objective") or graph_input.get("request")
+                            if isinstance(graph_input, Mapping)
+                            else None
+                        ),
+                        "messages": (
+                            graph_input.get("messages", [])
+                            if isinstance(graph_input, Mapping)
+                            else []
+                        ),
+                    },
+                    (
+                        f"{type(error).__name__}: {error}. "
+                        f"{PLAFOND_EXAUSTO_MESSAGE}"
+                        if isinstance(error, ProviderExhaustedError)
+                        or "plafond" in str(error).lower()
+                        else f"{type(error).__name__}: {error}"
+                    ),
                 ),
             )
 
@@ -262,6 +419,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Olá, {nome}! Sou o teu assistente inteligente.\n\n"
         "Envia-me uma mensagem e irei coordenar a equipa de agentes para te responder."
     )
+
+
+async def _send_admin_alert(text: str, _: str) -> None:
+    admin_chat_id = os.getenv("ADMIN_CHAT_ID", "").strip()
+    if not admin_chat_id or telegram_application is None:
+        return
+    await telegram_application.bot.send_message(chat_id=int(admin_chat_id), text=text)
 
 
 async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -383,6 +547,7 @@ def _build_application() -> Application:
         raise ValueError("TELEGRAM_TOKEN não configurado. Adiciona-o ao ficheiro .env.")
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("estado", estado))
     application.add_handler(CommandHandler("aprovar", approve))
     application.add_handler(CommandHandler("rejeitar", reject))
     application.add_handler(CallbackQueryHandler(approval_callback, pattern=r"^workflow:"))
@@ -397,10 +562,15 @@ WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
-    global grafo
+    global grafo, _availability_cleanup_task
     if telegram_application is None:
         raise RuntimeError("TELEGRAM_TOKEN não configurado.")
     grafo = await build_async_workflow()
+    configure_alert_sender(_send_admin_alert if os.getenv("ADMIN_CHAT_ID", "").strip() else None)
+    _availability_cleanup_task = asyncio.create_task(
+        _cleanup_availability_periodically(),
+        name="availability-cleanup",
+    )
     await telegram_application.initialize()
     await telegram_application.start()
     base_url = os.getenv("TELEGRAM_WEBHOOK_BASE_URL", "").strip().rstrip("/")
@@ -426,6 +596,11 @@ async def _lifespan(_: FastAPI):
     try:
         yield
     finally:
+        if _availability_cleanup_task is not None:
+            _availability_cleanup_task.cancel()
+            await asyncio.gather(_availability_cleanup_task, return_exceptions=True)
+            _availability_cleanup_task = None
+        configure_alert_sender(None)
         if polling_started and telegram_application.updater is not None:
             await telegram_application.updater.stop()
         await telegram_application.stop()
