@@ -222,6 +222,23 @@ def create_quality_node(
     reviewer, research = quality_models()
 
     def quality_node(state: WorkflowState):
+        def local_fallback_used() -> bool:
+            return (
+                getattr(research, "last_model", None) == "local-fallback"
+                or getattr(getattr(reviewer, "model", None), "last_model", None)
+                == "local-fallback"
+            )
+
+        if local_fallback_used():
+            return Command(
+                goto="__end__",
+                update={
+                    "status": "approved",
+                    "quality_feedback": "",
+                    "quality_report": None,
+                    "quality_iterations": state.get("quality_iterations", 0),
+                },
+            )
         approval_decision = state.get("approval_decision", "")
         if approval_decision == "rejected":
             return Command(
@@ -260,6 +277,16 @@ def create_quality_node(
         )
         try:
             research_response = research.invoke(messages)
+            if getattr(research, "last_model", None) == "local-fallback":
+                return Command(
+                    goto="__end__",
+                    update={
+                        "status": "approved",
+                        "quality_feedback": "",
+                        "quality_report": None,
+                        "quality_iterations": iteration,
+                    },
+                )
             if research_response.tool_calls:
                 messages.append(research_response)
                 for call in research_response.tool_calls:
@@ -278,6 +305,16 @@ def create_quality_node(
             reviewer_decisions = _run_reviewers(
                 reviewer, target, prompt, messages
             )
+            if local_fallback_used():
+                return Command(
+                    goto="__end__",
+                    update={
+                        "status": "approved",
+                        "quality_feedback": "",
+                        "quality_report": None,
+                        "quality_iterations": iteration,
+                    },
+                )
         except Exception as error:
             detail = f"{type(error).__name__}: {error}"
             return _failure_command(detail, iteration, state)

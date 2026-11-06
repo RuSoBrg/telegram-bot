@@ -54,7 +54,7 @@ def test_workflow_exception_always_sends_user_message(monkeypatch):
 
     text = context.bot.send_message.await_args.kwargs["text"]
     assert "pedido simples" in text
-    assert "RuntimeError" in text
+    assert "RuntimeError" not in text
 
 
 def test_quality_failure_keeps_last_specialist_response():

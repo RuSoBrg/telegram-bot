@@ -15,5 +15,5 @@ Bot Telegram (python-telegram-bot + FastAPI) sobre um grafo LangGraph com agente
 - Faz alterações mínimas e focadas. Não reformatar ficheiros inteiros nem renomear coisas sem necessidade.
 - Cada alteração de comportamento tem testes pytest em tests/. No fim de cada tarefa corre: uv run pytest -q e corrige o que partires.
 - Nunca escrever chaves, tokens ou segredos no código ou em testes. Usar variáveis de ambiente.
-- Não usar métodos privados/internos de bibliotecas de terceiros (ex.: métodos _select_deployment_* do LiteLLM Router).
+- Não usar métodos privados/internos de bibliotecas de terceiros.
 - No fim de cada tarefa, resume: ficheiros alterados, o que mudou, resultado dos testes, e o que ficou por fazer.

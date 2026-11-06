@@ -15,7 +15,9 @@ As variáveis podem ser definidas no `.env`:
   recurso local. Para executar o serviço opcional, use
   `docker compose --profile local-llm up`.
 - `ALLOWED_USER_IDS`: IDs Telegram autorizados para `/estado`, separados por
-  vírgulas. Vazio permite todos e é registado como aviso.
+  vírgulas. Vazio recusa o acesso por omissão.
+- `ALLOW_PUBLIC`: use `true` apenas para permitir acesso público quando
+  `ALLOWED_USER_IDS` está vazio.
 - `ADMIN_CHAT_ID`: chat Telegram que recebe alertas únicos quando um fornecedor
   é desativado por autenticação ou um modelo deixa de existir.
 

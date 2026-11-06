@@ -55,5 +55,10 @@ def prepare_messages_for_model(messages: list[Any]) -> list[Any]:
             "Não é possível invocar o modelo enquanto existem chamadas de ferramenta "
             "sem os respetivos ToolMessages."
         )
-    prepared.append(HumanMessage(content="Prossegue com o próximo passo da análise."))
+    prepared.append(
+        HumanMessage(
+            content="Prossegue com o próximo passo da análise.",
+            additional_kwargs={"synthetic": True},
+        )
+    )
     return prepared

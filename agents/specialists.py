@@ -28,7 +28,7 @@ def create_specialist_node(
 ):
     """Create a specialist node with its dynamic role prompt and fallback model."""
     model = specialist_models(agent_name)
-    label = AGENT_LABELS.get(agent_name, f"[{agent_name}]")
+    base_label = AGENT_LABELS.get(agent_name, f"[{agent_name}]")
     max_steps = load_runtime_limits().max_steps
 
     def specialist_node(state: WorkflowState):
@@ -69,7 +69,7 @@ def create_specialist_node(
             ):
                 response = model.invoke([SystemMessage(content=prompt)] + conversation)
             model_used = response.additional_kwargs.get("model_used", "local-fallback")
-            label = f"{AGENT_LABELS.get(agent_name, f'[{agent_name}]')} / {model_used}"
+            final_label = f"{base_label} / {model_used}"
         except Exception as error:
             detail = f"{type(error).__name__}: {error}"
             return Command(
@@ -78,7 +78,7 @@ def create_specialist_node(
                     "messages": [
                         AIMessage(
                             content=(
-                                f"❌ {label} falhou e o workflow foi terminado.\nErro: {detail}"
+                                f"❌ {base_label} falhou e o workflow foi terminado."
                             )
                         )
                     ],
@@ -103,7 +103,7 @@ def create_specialist_node(
             goto=quality_node_name,
             update={
                 "messages": [
-                    AIMessage(content=f"{label}:\n{content_to_text(response.content)}")
+                    AIMessage(content=f"{final_label}:\n{content_to_text(response.content)}")
                 ],
                 "status": "reviewing",
                 "steps": steps + 1,

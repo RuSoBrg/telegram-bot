@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import re
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any
 
 import litellm
+from pydantic import ValidationError
 
 
 class ErrorKind(StrEnum):
@@ -18,6 +19,7 @@ class ErrorKind(StrEnum):
     MODEL_NOT_FOUND = "model_not_found"
     CONTEXT_TOO_LONG = "context_too_long"
     STRUCTURED_OUTPUT_FAILURE = "structured_output_failure"
+    BAD_REQUEST = "bad_request"
     UNKNOWN = "unknown"
 
 
@@ -54,10 +56,6 @@ def classify_error(
 ) -> ClassifiedError:
     now = datetime.now(timezone.utc)
     text = str(exc).lower()
-    if structured:
-        return ClassifiedError(ErrorKind.STRUCTURED_OUTPUT_FAILURE, None, None)
-    if isinstance(exc, litellm.ContextWindowExceededError) or "context" in text and "long" in text:
-        return ClassifiedError(ErrorKind.CONTEXT_TOO_LONG, None, None)
     if isinstance(exc, litellm.AuthenticationError):
         return ClassifiedError(ErrorKind.AUTH, None, "provider")
     if isinstance(exc, litellm.NotFoundError) or "model not found" in text:
@@ -81,4 +79,17 @@ def classify_error(
     if isinstance(exc, litellm.ServiceUnavailableError) or "server error" in text:
         seconds = (1, 2, 5, 15)[min(fail_count, 3)] * 60
         return ClassifiedError(ErrorKind.SERVER_ERROR, now + timedelta(seconds=seconds), None)
-    return ClassifiedError(ErrorKind.UNKNOWN, now + timedelta(minutes=1), None)
+    if isinstance(exc, litellm.ContextWindowExceededError) or (
+        "context" in text and "long" in text
+    ):
+        return ClassifiedError(ErrorKind.CONTEXT_TOO_LONG, None, None)
+    if structured and (
+        isinstance(exc, (ValidationError, json.JSONDecodeError))
+    ):
+        return ClassifiedError(ErrorKind.STRUCTURED_OUTPUT_FAILURE, None, None)
+    if isinstance(exc, getattr(litellm, "BadRequestError", ())):
+        return ClassifiedError(ErrorKind.BAD_REQUEST, None, None)
+    if isinstance(exc, (ValueError, TypeError)):
+        return ClassifiedError(ErrorKind.BAD_REQUEST, None, None)
+    retry_at = now + timedelta(seconds=30) if fail_count >= 2 else None
+    return ClassifiedError(ErrorKind.UNKNOWN, retry_at, None)

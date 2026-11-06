@@ -32,7 +32,6 @@ from domain.events import iter_app_events
 from domain.models import ArtifactRecord, WorkflowRun, WorkflowStatus
 from domain.observability import log_event, timed_event
 from domain.persistence import WorkflowStore
-from agents.runtime import PLAFOND_EXAUSTO_MESSAGE, ProviderExhaustedError
 from workflows.main_workflow import GRAPH_RECURSION_LIMIT
 from workflows.main_workflow import build_async_workflow
 from tools.file_tools import store as object_store
@@ -53,6 +52,7 @@ workflow_store = WorkflowStore()
 artifact_store = ArtifactVersionStore()
 grafo: Any | None = None
 _availability_cleanup_task: asyncio.Task | None = None
+_chat_locks: dict[str, asyncio.Lock] = {}
 
 
 def _allowed_user_ids() -> set[int]:
@@ -71,10 +71,24 @@ def _allowed_user_ids() -> set[int]:
 def _is_authorized(update: Update) -> bool:
     allowed = _allowed_user_ids()
     if not allowed:
-        logger.warning("ALLOWED_USER_IDS está vazio; /estado fica acessível a todos.")
-        return True
+        public = os.getenv("ALLOW_PUBLIC", "false").lower() in {"1", "true", "yes", "on"}
+        if not public:
+            logger.warning("ALLOWED_USER_IDS está vazio e ALLOW_PUBLIC=false; acesso recusado.")
+        return public
     user = update.effective_user
     return bool(user and user.id in allowed)
+
+
+async def _reject_unauthorized(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_chat:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Não tens autorização para usar este bot.",
+        )
+
+
+def _lock_for_chat(chat_id: str) -> asyncio.Lock:
+    return _chat_locks.setdefault(chat_id, asyncio.Lock())
 
 
 def _format_availability(value: Any) -> str:
@@ -109,11 +123,7 @@ def _state_text() -> str:
 
 async def estado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
-        if update.effective_chat:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="Não tens autorização para consultar o estado dos modelos.",
-            )
+        await _reject_unauthorized(update, context)
         return
     if update.effective_chat:
         await context.bot.send_message(
@@ -282,10 +292,12 @@ def _best_available_text(
                 request = message.content
                 break
     request = request or "o teu pedido"
-    detail = str(error).strip() if error is not None and str(error).strip() else "uma falha inesperada"
+    if error is not None:
+        logger.warning("Resposta de último recurso após erro de workflow: %s", error)
     return (
         f"⚠️ Não consegui concluir «{request}». "
-        f"Ocorreu {detail}. Podes tentar novamente com o mesmo pedido."
+        "O serviço encontrou uma dificuldade temporária. "
+        "Podes tentar novamente com o mesmo pedido."
     )
 
 
@@ -374,46 +386,44 @@ async def _run_graph_events(
     chat_id: str,
     request_id: str,
 ) -> None:
-    try:
-        eventos = await _stream_graph(graph_input, chat_id)
-        with timed_event(
-            "workflow_execution",
-            request_id=request_id,
-            workflow="auto",
-            agent="orchestrator",
-        ):
-            await _send_graph_events(update, context, eventos, request_id)
-        log_event("workflow_finished", request_id=request_id)
-    except Exception as error:
-        logger.exception("Erro ao executar workflow %s", request_id)
-        if update.effective_chat:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=_best_available_text(
-                    {
-                        "objective": (
-                            graph_input.get("objective") or graph_input.get("request")
-                            if isinstance(graph_input, Mapping)
-                            else None
-                        ),
-                        "messages": (
-                            graph_input.get("messages", [])
-                            if isinstance(graph_input, Mapping)
-                            else []
-                        ),
-                    },
-                    (
-                        f"{type(error).__name__}: {error}. "
-                        f"{PLAFOND_EXAUSTO_MESSAGE}"
-                        if isinstance(error, ProviderExhaustedError)
-                        or "plafond" in str(error).lower()
-                        else f"{type(error).__name__}: {error}"
+    async with _lock_for_chat(chat_id):
+        try:
+            eventos = await _stream_graph(graph_input, chat_id)
+            with timed_event(
+                "workflow_execution",
+                request_id=request_id,
+                workflow="auto",
+                agent="orchestrator",
+            ):
+                await _send_graph_events(update, context, eventos, request_id)
+            log_event("workflow_finished", request_id=request_id)
+        except Exception as error:
+            logger.exception("Erro ao executar workflow %s", request_id)
+            if update.effective_chat:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=_best_available_text(
+                        {
+                            "objective": (
+                                graph_input.get("objective") or graph_input.get("request")
+                                if isinstance(graph_input, Mapping)
+                                else None
+                            ),
+                            "messages": (
+                                graph_input.get("messages", [])
+                                if isinstance(graph_input, Mapping)
+                                else []
+                            ),
+                        },
+                        error,
                     ),
-                ),
-            )
+                )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_authorized(update):
+        await _reject_unauthorized(update, context)
+        return
     nome = update.effective_user.first_name if update.effective_user else "utilizador"
     await update.message.reply_text(
         f"Olá, {nome}! Sou o teu assistente inteligente.\n\n"
@@ -429,6 +439,9 @@ async def _send_admin_alert(text: str, _: str) -> None:
 
 
 async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_authorized(update):
+        await _reject_unauthorized(update, context)
+        return
     if not update.message or not update.effective_chat:
         return
     thread_id = str(update.effective_chat.id)
@@ -446,6 +459,9 @@ async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_authorized(update):
+        await _reject_unauthorized(update, context)
+        return
     if not update.message or not update.effective_chat:
         return
     thread_id = str(update.effective_chat.id)
@@ -468,6 +484,10 @@ async def approval_callback(
     """Resume the durable LangGraph thread from an inline approval action."""
     query = update.callback_query
     if query is None or query.message is None:
+        return
+    if not _is_authorized(update):
+        await query.answer()
+        await query.edit_message_text("Não tens autorização para esta ação.")
         return
     await query.answer()
     action = (query.data or "").split(":", 1)[-1]
@@ -504,6 +524,9 @@ async def approval_callback(
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_authorized(update):
+        await _reject_unauthorized(update, context)
+        return
     if not update.message or not update.message.text or not update.effective_chat:
         return
 
@@ -565,6 +588,11 @@ async def _lifespan(_: FastAPI):
     global grafo, _availability_cleanup_task
     if telegram_application is None:
         raise RuntimeError("TELEGRAM_TOKEN não configurado.")
+    base_url = os.getenv("TELEGRAM_WEBHOOK_BASE_URL", "").strip().rstrip("/")
+    if base_url and not os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip():
+        raise RuntimeError(
+            "TELEGRAM_WEBHOOK_SECRET é obrigatório quando o webhook está configurado."
+        )
     grafo = await build_async_workflow()
     configure_alert_sender(_send_admin_alert if os.getenv("ADMIN_CHAT_ID", "").strip() else None)
     _availability_cleanup_task = asyncio.create_task(
@@ -573,7 +601,6 @@ async def _lifespan(_: FastAPI):
     )
     await telegram_application.initialize()
     await telegram_application.start()
-    base_url = os.getenv("TELEGRAM_WEBHOOK_BASE_URL", "").strip().rstrip("/")
     polling_started = False
     if base_url:
         webhook_url = f"{base_url}{WEBHOOK_PATH}"

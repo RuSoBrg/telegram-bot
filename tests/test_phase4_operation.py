@@ -70,3 +70,15 @@ def test_periodic_cleanup_task_is_cancelable(monkeypatch, tmp_path):
         assert task.cancelled()
 
     asyncio.run(run())
+
+
+def test_empty_allowlist_is_private_by_default(monkeypatch):
+    monkeypatch.delenv("ALLOWED_USER_IDS", raising=False)
+    monkeypatch.setenv("ALLOW_PUBLIC", "false")
+    import bot
+
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=42))
+    assert not bot._is_authorized(update)
+
+    monkeypatch.setenv("ALLOW_PUBLIC", "true")
+    assert bot._is_authorized(update)
