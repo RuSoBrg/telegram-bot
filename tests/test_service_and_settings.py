@@ -11,7 +11,7 @@ def test_settings_parse_telegram_ids_from_csv(monkeypatch):
 
     settings = Settings()
 
-    assert settings.ALLOWED_TELEGRAM_USER_IDS == [12345678, 87654321]
+    assert settings.allowed_telegram_user_ids == [12345678, 87654321]
 
 
 def test_service_collects_response_artifacts_approval_and_errors():

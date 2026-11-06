@@ -28,6 +28,7 @@ class ResearchSource(BaseModel):
 
 
 class ArtifactRecord(BaseModel):
+    artifact_id: str = ""
     filename: str
     path: str
     mime_type: str

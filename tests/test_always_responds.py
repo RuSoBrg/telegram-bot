@@ -4,8 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from domain.artifacts import ArtifactVersionStore
-from domain.persistence import WorkflowStore
+from domain.db import ArtifactStore as ArtifactVersionStore, WorkflowStore
 
 with (
     patch.object(WorkflowStore, "__init__", lambda self, _database_url=None: None),

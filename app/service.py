@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Mapping
 
 from domain.events import AppEvent, iter_app_events
+from workflows.main_workflow import GRAPH_RECURSION_LIMIT, build_async_workflow
 
 
 @dataclass
@@ -33,7 +34,7 @@ class WorkflowService:
             graph_input,
             config={
                 "configurable": {"thread_id": thread_id},
-                "recursion_limit": 30,
+                "recursion_limit": GRAPH_RECURSION_LIMIT,
             },
             stream_mode="values",
         )
@@ -85,3 +86,20 @@ async def execute_workflow(
     thread_id: str,
 ) -> JobResult:
     return await WorkflowService(graph).execute(graph_input, thread_id)
+
+
+async def run_job(
+    prompt: str | Any,
+    thread_id: str,
+    *,
+    user_id: str | None = None,
+    graph: Any | None = None,
+) -> JobResult:
+    """Executa um pedido sem expor o grafo às interfaces."""
+    workflow = graph or await build_async_workflow()
+    graph_input = prompt if not isinstance(prompt, str) else {
+        "messages": [{"role": "user", "content": prompt}],
+        "request_id": thread_id,
+        "user_id": user_id or thread_id,
+    }
+    return await WorkflowService(workflow).execute(graph_input, thread_id)

@@ -27,14 +27,13 @@ from telegram.ext import (
     filters,
 )
 
-from domain.artifacts import ArtifactVersionStore
+from domain.db import ArtifactStore, init_db
 from domain.events import iter_app_events
 from domain.models import ArtifactRecord, WorkflowRun, WorkflowStatus
 from domain.observability import log_event, timed_event
-from domain.persistence import WorkflowStore
+from domain.db import WorkflowStore
 from workflows.main_workflow import GRAPH_RECURSION_LIMIT
 from workflows.main_workflow import build_async_workflow
-from tools.file_tools import store as object_store
 from psycopg import Error as PsycopgError
 from routing.availability import AvailabilityStore
 from routing.alerts import configure_alert_sender
@@ -53,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = get_settings().telegram_token
 workflow_store = WorkflowStore()
-artifact_store = ArtifactVersionStore()
+artifact_store = ArtifactStore()
 grafo: Any | None = None
 workflow_service = WorkflowService()
 _availability_cleanup_task: asyncio.Task | None = None
@@ -228,6 +227,7 @@ def _update_run(
     run.status = _workflow_status(approval_required, latest_state)
     run.artifacts = [
         ArtifactRecord(
+            artifact_id=item.get("artifact_id", ""),
             filename=item["filename"],
             path=item["uri"],
             mime_type=item.get("mime_type", "application/octet-stream"),
@@ -235,11 +235,6 @@ def _update_run(
         )
         for item in artifacts
     ]
-    for item in run.artifacts:
-        try:
-            artifact_store.register(item.filename, item.path, item.mime_type)
-        except FileNotFoundError:
-            logger.warning("Artefacto não é um caminho local: %s", item.path)
     if latest_state.get("quality_report"):
         run.quality_report = latest_state["quality_report"]
     if latest_state.get("research_sources"):
@@ -345,13 +340,12 @@ def _best_available_text(
 
 
 async def _send_artifacts(context, chat_id: int, artifacts: list[dict]) -> None:
-    reader = getattr(object_store, "get_bytes", None)
-    if reader is None and artifacts:
-        raise RuntimeError("O ObjectStore configurado não suporta leitura de artefactos.")
     for artifact in artifacts:
         filename = artifact.get("filename", "")
-        key = artifact.get("key") or filename
-        file_bytes = await asyncio.to_thread(reader, key)
+        artifact_id = artifact.get("artifact_id")
+        if not artifact_id:
+            raise ValueError(f"Artefacto sem ID persistido: {filename}")
+        file_bytes = await asyncio.to_thread(artifact_store.get_bytes, artifact_id)
         await context.bot.send_document(
             chat_id=chat_id,
             document=file_bytes,
@@ -644,6 +638,7 @@ async def _lifespan(_: FastAPI):
         raise RuntimeError(
             "TELEGRAM_WEBHOOK_SECRET é obrigatório quando o webhook está configurado."
         )
+    await init_db()
     grafo = await build_async_workflow()
     configure_alert_sender(_send_admin_alert if settings.admin_chat_id.strip() else None)
     _availability_cleanup_task = asyncio.create_task(

@@ -5,15 +5,15 @@ from pathlib import PurePosixPath
 from langchain_core.tools import tool
 
 from domain.models import ArtifactRecord
-from domain.object_store import create_object_store
+from domain.db import ArtifactStore
 
 
-object_store = create_object_store()
+artifact_store = ArtifactStore()
 
 
 @tool
 def validar_artefactos(paths: list[str]) -> str:
-    """Valida artefactos através das chaves/URIs do ObjectStore."""
+    """Valida artefactos através dos IDs persistidos na base de dados."""
     allowed = {
         ".docx",
         ".pptx",
@@ -29,14 +29,11 @@ def validar_artefactos(paths: list[str]) -> str:
     }
     artefacts: list[ArtifactRecord] = []
     errors: list[str] = []
-    reader = getattr(object_store, "get_bytes", None)
-    if reader is None:
-        return json.dumps({"valid": False, "artefacts": [], "errors": ["Backend sem leitura de artefactos."]})
     for key in paths:
         name = PurePosixPath(key.split("?", 1)[0]).name
         suffix = PurePosixPath(name).suffix.lower()
         try:
-            data = reader(key)
+            data = artifact_store.get_bytes(key)
         except (FileNotFoundError, KeyError):
             errors.append(f"Ficheiro inexistente: {name}")
             continue
@@ -63,8 +60,9 @@ def validar_artefactos(paths: list[str]) -> str:
             }[suffix]
             artefacts.append(
                 ArtifactRecord(
+                    artifact_id=key,
                     filename=name,
-                    path=object_store.get_url(key),
+                    path=f"db://artifacts/{key}",
                     mime_type=mime,
                     size_bytes=len(data),
                     sha256=hashlib.sha256(data).hexdigest(),

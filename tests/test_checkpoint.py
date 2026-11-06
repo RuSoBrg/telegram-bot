@@ -3,7 +3,7 @@ import unittest
 
 import psycopg
 
-from domain.checkpoint import create_checkpoint_saver, get_checkpoint_saver
+from domain.db import create_checkpoint_saver, get_checkpoint_saver
 
 
 class CheckpointTests(unittest.TestCase):

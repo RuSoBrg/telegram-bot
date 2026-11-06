@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     postgres_user: str = "ai_workspace"
     postgres_password: str = ""
     database_url: str = ""
+    workflow_db_path: str = ""
 
     azure_openai_api_key: str = ""
     azure_openai_endpoint: str = ""
@@ -54,7 +55,6 @@ class Settings(BaseSettings):
     quota_window_seconds: int = 86_400
     research_cache_ttl_seconds: int = 3600
     research_cache_enabled: bool = True
-    object_storage_path: str = "/app/data"
     agent_allowed_roots: str = ""
     show_model_footer: bool = True
     host: str = "0.0.0.0"
@@ -78,9 +78,6 @@ class Settings(BaseSettings):
     def telegram_user_ids(self) -> list[int]:
         return self.allowed_telegram_user_ids or self.allowed_user_ids
 
-    @property
-    def ALLOWED_TELEGRAM_USER_IDS(self) -> list[int]:
-        return self.allowed_telegram_user_ids
 
 
 def get_settings() -> Settings:

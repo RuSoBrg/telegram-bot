@@ -10,6 +10,7 @@ from agents.runtime import (
     prepare_messages_for_model,
 )
 from domain.models import ReviewResult
+from domain.state import compact_source_metadata
 from domain.quality import build_review_result
 from domain.state import WorkflowState
 from tools.validation_tools import validar_artefactos
@@ -47,7 +48,11 @@ def _observations(messages):
         if payload.get("tipo") == "ficheiro_gerado" and payload.get("uri"):
             artifacts.append(payload)
         artifacts.extend(payload.get("artefacts", []))
-        sources.extend(payload.get("fontes", []))
+        sources.extend(
+            compact_source_metadata(source)
+            for source in payload.get("fontes", [])
+            if isinstance(source, dict)
+        )
     return artifacts, sources
 
 

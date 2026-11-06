@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from domain.models import TrainingActivity, TrainingPackage, WorkflowRun, WorkflowStatus
-from domain.persistence import WorkflowStore
+from domain.db import WorkflowStore
 from tools.validation_tools import validar_artefactos
 
 

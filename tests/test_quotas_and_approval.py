@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from domain.approval import requires_human_approval
-from domain.quotas import QuotaExceededError, UserQuotaStore
+from domain.db import QuotaExceededError, UserQuotaStore
 
 
 class QuotasAndApprovalTests(unittest.TestCase):

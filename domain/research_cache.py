@@ -6,7 +6,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from domain.database import connect
+from domain.db import connect
 
 
 class ResearchCache:

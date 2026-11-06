@@ -19,9 +19,9 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 from domain.limits import load_runtime_limits
-from domain.object_store import ObjectStore, create_object_store
+from domain.db import ArtifactStore
 
-store: ObjectStore = create_object_store()
+artifact_store = ArtifactStore()
 
 
 def _filename(filename: str, extension: str, prefix: str) -> str:
@@ -47,8 +47,10 @@ def _artifact(filename: str, uri: str, mime_type: str, data: bytes) -> str:
         {
             "tipo": "ficheiro_gerado",
             "filename": filename,
-            "key": filename,
-            "uri": uri,
+            "artifact_id": uri,
+            "key": uri,
+            "uri": f"db://artifacts/{uri}",
+            "name": filename,
             "mime_type": mime_type,
             "size_bytes": len(data),
             "sha256": hashlib.sha256(data).hexdigest(),
@@ -58,8 +60,8 @@ def _artifact(filename: str, uri: str, mime_type: str, data: bytes) -> str:
 
 
 def _publish(filename: str, data: bytes, mime_type: str) -> str:
-    uri = store.put_bytes(filename, data)
-    return _artifact(filename, uri, mime_type, data)
+    metadata = artifact_store.put_bytes(filename, data, mime_type)
+    return _artifact(filename, metadata["artifact_id"], mime_type, data)
 
 
 def _require_env(*names: str) -> dict[str, str]:
@@ -91,7 +93,7 @@ def _lines(content: str) -> list[str]:
 
 
 def _read_key(key: str) -> bytes:
-    reader = getattr(store, "get_bytes", None)
+    reader = getattr(artifact_store, "get_bytes", None)
     if reader is None:
         raise ValueError("Este backend não suporta leitura de artefactos para ZIP.")
     return reader(key)

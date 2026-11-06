@@ -25,6 +25,10 @@ As variáveis podem ser definidas no `.env`:
 Também são necessárias as credenciais dos fornecedores indicadas no
 `.env.example`.
 
+Runs, quotas, checkpoints e bytes de artefactos são persistidos pela camada
+única [`domain/db.py`](domain/db.py), em PostgreSQL no ambiente Docker ou
+SQLite nos testes locais. O Streamlit usa apenas a API assíncrona de serviço.
+
 ## Editar o catálogo
 
 Os rankings estão em [`routing/catalog.yaml`](routing/catalog.yaml). Cada

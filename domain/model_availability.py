@@ -6,7 +6,7 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from domain.database import connect
+from domain.db import connect
 
 
 class ModelAvailabilityStore:
