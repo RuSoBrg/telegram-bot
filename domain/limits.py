@@ -1,5 +1,6 @@
-import os
 from dataclasses import dataclass
+
+from app.settings import get_settings
 
 
 @dataclass(frozen=True)
@@ -15,13 +16,14 @@ class RuntimeLimits:
 
 
 def load_runtime_limits() -> RuntimeLimits:
+    settings = get_settings()
     return RuntimeLimits(
-        max_steps=int(os.getenv("MAX_STEPS", "5")),
-        max_quality_iterations=int(os.getenv("MAX_QUALITY_ITERATIONS", "3")),
-        max_research_results=int(os.getenv("MAX_RESEARCH_RESULTS", "5")),
-        max_generated_content_chars=int(os.getenv("MAX_GENERATED_CONTENT_CHARS", "100000")),
-        max_media_seconds=int(os.getenv("MAX_MEDIA_SECONDS", "60")),
-        tool_timeout_seconds=int(os.getenv("TOOL_TIMEOUT_SECONDS", "600")),
-        max_user_operations=int(os.getenv("MAX_USER_OPERATIONS", "100")),
-        quota_window_seconds=int(os.getenv("QUOTA_WINDOW_SECONDS", "86400")),
+        max_steps=settings.max_steps,
+        max_quality_iterations=settings.max_quality_iterations,
+        max_research_results=settings.max_research_results,
+        max_generated_content_chars=settings.max_generated_content_chars,
+        max_media_seconds=settings.max_media_seconds,
+        tool_timeout_seconds=settings.tool_timeout_seconds,
+        max_user_operations=settings.max_user_operations,
+        quota_window_seconds=settings.quota_window_seconds,
     )

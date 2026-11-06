@@ -1,7 +1,6 @@
 import asyncio
 import hmac
 import logging
-import os
 import sqlite3
 import weakref
 from contextlib import asynccontextmanager
@@ -10,7 +9,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 from uuid import uuid4
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 import uvicorn
 import litellm
@@ -44,6 +42,8 @@ from routing.catalog import load_catalog
 from routing.router import ModelRouter
 from routing.errors import ErrorKind, classify_error
 from routing.alerts import notify_disabled
+from app.service import WorkflowService
+from app.settings import get_settings
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -51,32 +51,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_TOKEN = get_settings().telegram_token
 workflow_store = WorkflowStore()
 artifact_store = ArtifactVersionStore()
 grafo: Any | None = None
+workflow_service = WorkflowService()
 _availability_cleanup_task: asyncio.Task | None = None
 _chat_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
 def _allowed_user_ids() -> set[int]:
-    values = {
-        item.strip()
-        for item in os.getenv("ALLOWED_USER_IDS", "").split(",")
-        if item.strip()
-    }
-    try:
-        return {int(item) for item in values}
-    except ValueError:
-        logger.warning("ALLOWED_USER_IDS contém valores inválidos; estes serão ignorados.")
-        return {int(item) for item in values if item.isdigit()}
+    return set(get_settings().telegram_user_ids)
 
 
 def _is_authorized(update: Update) -> bool:
     allowed = _allowed_user_ids()
     if not allowed:
-        public = os.getenv("ALLOW_PUBLIC", "false").lower() in {"1", "true", "yes", "on"}
+        public = get_settings().allow_public
         if not public:
             logger.warning("ALLOWED_USER_IDS está vazio e ALLOW_PUBLIC=false; acesso recusado.")
         return public
@@ -131,9 +122,10 @@ async def estado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _reject_unauthorized(update, context)
         return
     if update.effective_chat:
+        state_text = await asyncio.to_thread(_state_text)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=_state_text(),
+            text=state_text,
         )
 
 
@@ -301,7 +293,7 @@ async def _send_workflow_message(
 
 
 def _with_model_footer(text: str, latest_state: Mapping[str, Any]) -> str:
-    if os.getenv("SHOW_MODEL_FOOTER", "true").lower() not in {"1", "true", "yes", "on"}:
+    if not get_settings().show_model_footer:
         return text
     if "— " in text[-120:]:
         return text
@@ -378,21 +370,26 @@ async def _send_graph_events(
     artefactos: list[dict] = []
     approval_required = False
     latest_state: dict = {}
-    events = [event async for event in _iter_graph_events(eventos)]
-    resposta_final, artefactos, approval_required, latest_state = _collect_graph_events(events)
+    result = await workflow_service.collect(eventos)
+    resposta_final = result.text
+    artefactos = result.artifacts
+    approval_required = result.needs_approval
+    latest_state = result.state
 
     chat_id = update.effective_chat.id if update.effective_chat else None
     if chat_id is None:
         raise ValueError("Não foi possível determinar o chat do Telegram.")
 
-    _update_run(request_id, approval_required, latest_state, artefactos)
+    await asyncio.to_thread(
+        _update_run, request_id, approval_required, latest_state, artefactos
+    )
 
     await _send_workflow_message(
         context,
         chat_id,
         resposta_final,
         approval_required,
-        latest_state.get("errors", []),
+        result.errors,
         latest_state,
     )
 
@@ -484,7 +481,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _send_admin_alert(text: str, _: str) -> None:
-    admin_chat_id = os.getenv("ADMIN_CHAT_ID", "").strip()
+    admin_chat_id = get_settings().admin_chat_id.strip()
     if not admin_chat_id or telegram_application is None:
         return
     await telegram_application.bot.send_message(chat_id=int(admin_chat_id), text=text)
@@ -590,14 +587,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     request_id = str(uuid4())
     chat_id = str(update.effective_chat.id)
     context.user_data["request_id"] = request_id
-    workflow_store.save(
+    await asyncio.to_thread(
+        workflow_store.save,
         WorkflowRun(
             request_id=request_id,
             workflow="auto",
             user_id=str(update.effective_user.id if update.effective_user else chat_id),
             objective=texto,
             status=WorkflowStatus.PRODUCING,
-        )
+        ),
     )
     log_event("workflow_started", request_id=request_id, workflow="auto", user_id=chat_id)
     await update.message.reply_text("⏳ A processar o teu pedido...")
@@ -632,7 +630,7 @@ def _build_application() -> Application:
 
 telegram_application = _build_application() if TELEGRAM_TOKEN else None
 WEBHOOK_PATH = "/telegram/webhook"
-WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+WEBHOOK_SECRET = get_settings().telegram_webhook_secret
 
 
 @asynccontextmanager
@@ -640,13 +638,14 @@ async def _lifespan(_: FastAPI):
     global grafo, _availability_cleanup_task
     if telegram_application is None:
         raise RuntimeError("TELEGRAM_TOKEN não configurado.")
-    base_url = os.getenv("TELEGRAM_WEBHOOK_BASE_URL", "").strip().rstrip("/")
-    if base_url and not os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip():
+    settings = get_settings()
+    base_url = settings.telegram_webhook_base_url.strip().rstrip("/")
+    if base_url and not settings.telegram_webhook_secret.strip():
         raise RuntimeError(
             "TELEGRAM_WEBHOOK_SECRET é obrigatório quando o webhook está configurado."
         )
     grafo = await build_async_workflow()
-    configure_alert_sender(_send_admin_alert if os.getenv("ADMIN_CHAT_ID", "").strip() else None)
+    configure_alert_sender(_send_admin_alert if settings.admin_chat_id.strip() else None)
     _availability_cleanup_task = asyncio.create_task(
         _cleanup_availability_periodically(),
         name="availability-cleanup",
@@ -739,8 +738,9 @@ async def telegram_webhook(
 
 
 def main() -> None:
-    host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "8000"))
+    settings = get_settings()
+    host = settings.host
+    port = settings.port
     logger.info("Bot do Telegram iniciado em http://%s:%d%s", host, port, WEBHOOK_PATH)
     uvicorn.run(api, host=host, port=port)
 

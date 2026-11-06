@@ -17,6 +17,7 @@ dependencies = [
     "streamlit",
     "python-dotenv",
     "pydantic",
+    "pydantic-settings",
     "psycopg[binary]",
     "python-docx",
     "python-pptx",
