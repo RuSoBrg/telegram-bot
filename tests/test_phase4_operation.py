@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 from routing.alerts import notify_disabled, reset_alerts_for_tests, configure_alert_sender
 
@@ -82,3 +82,34 @@ def test_empty_allowlist_is_private_by_default(monkeypatch):
 
     monkeypatch.setenv("ALLOW_PUBLIC", "true")
     assert bot._is_authorized(update)
+
+
+def test_catalog_validation_uses_minimal_call_without_blocking(monkeypatch, tmp_path):
+    import bot
+    from routing.catalog import ModelEntry
+
+    calls = []
+
+    async def fake_completion(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(
+        bot,
+        "load_catalog",
+        lambda: {
+            "test": [
+                ModelEntry(
+                    "fake", "model", "FAKE_API_KEY", (), 10, 1
+                )
+            ]
+        },
+    )
+    monkeypatch.setenv("FAKE_API_KEY", "configured")
+    monkeypatch.setenv("DATABASE_URL", "")
+    monkeypatch.setenv("MODEL_AVAILABILITY_DB_PATH", str(tmp_path / "availability.db"))
+    monkeypatch.setattr(bot.litellm, "acompletion", fake_completion)
+    asyncio.run(bot._validate_catalog_models())
+
+    assert calls[0]["max_tokens"] == 1
+    assert calls[0]["timeout"] == 5
+    assert calls[0]["api_key"] == "configured"

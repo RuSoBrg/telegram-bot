@@ -53,23 +53,30 @@ class StructuredRoutedRunnable(Runnable[Any, Any]):
         self.model = model
         self.schema = schema
 
-    def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+    def invoke_with_meta(self, input: Any, config: Any = None, **kwargs: Any) -> tuple[Any, str]:
         result, model_used = self.model.router.invoke_sync(
             self.model.task, _input_messages(input), self.model.tools, self.schema
         )
         self.model.last_model = model_used
         if isinstance(result, self.schema):
-            return result
-        return _structured_fallback(self.schema, result)
+            return result, model_used
+        return _structured_fallback(self.schema, result), model_used
 
-    async def ainvoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+    def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+        return self.invoke_with_meta(input, config, **kwargs)[0]
+
+    async def ainvoke_with_meta(self, input: Any, config: Any = None, **kwargs: Any) -> tuple[Any, str]:
         result, model_used = await self.model.router.invoke(
             self.model.task, _input_messages(input), self.model.tools, self.schema
         )
         self.model.last_model = model_used
         if isinstance(result, self.schema):
-            return result
-        return _structured_fallback(self.schema, result)
+            return result, model_used
+        return _structured_fallback(self.schema, result), model_used
+
+    async def ainvoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+        result, _ = await self.ainvoke_with_meta(input, config, **kwargs)
+        return result
 
 
 class RoutedChatModel(BaseChatModel):
@@ -110,6 +117,28 @@ class RoutedChatModel(BaseChatModel):
             response = AIMessage(content=str(response))
         response.additional_kwargs["model_used"] = model_used
         return ChatResult(generations=[ChatGeneration(message=response)])
+
+    def invoke_with_meta(self, messages: list[BaseMessage], **kwargs: Any) -> tuple[AIMessage, str]:
+        response, model_used = self.router.invoke_sync(
+            self.task, messages, self.tools or None
+        )
+        self.last_model = model_used
+        if not isinstance(response, AIMessage):
+            response = AIMessage(content=str(response))
+        response.additional_kwargs["model_used"] = model_used
+        return response, model_used
+
+    async def ainvoke_with_meta(
+        self, messages: list[BaseMessage], **kwargs: Any
+    ) -> tuple[AIMessage, str]:
+        response, model_used = await self.router.invoke(
+            self.task, messages, self.tools or None
+        )
+        self.last_model = model_used
+        if not isinstance(response, AIMessage):
+            response = AIMessage(content=str(response))
+        response.additional_kwargs["model_used"] = model_used
+        return response, model_used
 
 
 def _input_messages(value: Any) -> list[Any]:

@@ -12,6 +12,7 @@ class WorkflowStatus(StrEnum):
     REVIEWING = "reviewing"
     APPROVAL_REQUIRED = "approval_required"
     APPROVED = "approved"
+    DEGRADED = "degraded"
     REJECTED = "rejected"
     FAILED = "failed"
 
@@ -89,6 +90,6 @@ class WorkflowRun(BaseModel):
     objective: str = ""
     sources: list[ResearchSource] = Field(default_factory=list)
     artifacts: list[ArtifactRecord] = Field(default_factory=list)
-    quality_report: ReviewResult | None = None
+    quality_report: ReviewResult | dict | None = None
     errors: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)

@@ -36,8 +36,13 @@ def create_supervisor_node():
                 )
             )
         ] + state.get("messages", [])
+        model_used = "router"
         try:
-            decision = model.invoke(messages)
+            if type(model).__name__ == "StructuredRoutedRunnable":
+                decision, model_used = model.invoke_with_meta(messages)
+            else:
+                decision = model.invoke(messages)
+                model_used = "router"
         except Exception as error:
             destination = classify_messages(state.get("messages", []))
             decision = type(
@@ -54,7 +59,7 @@ def create_supervisor_node():
             fallback_error = f"Fallback local do supervisor: {type(error).__name__}: {error}"
         else:
             fallback_error = ""
-            if getattr(getattr(model, "model", None), "last_model", "") == "local-fallback":
+            if model_used == "local-fallback":
                 decision.destino = classify_messages(state.get("messages", []))
                 decision.resposta_ou_instrucao = (
                     "Responde diretamente ao pedido com uma orientação prática."
@@ -76,7 +81,7 @@ def create_supervisor_node():
             "next_agent": decision.destino,
             "steps": steps + 1,
             "agent_used": "supervisor",
-            "model_used": getattr(getattr(model, "model", None), "last_model", "router"),
+            "model_used": model_used,
         }
         if fallback_error:
             update["errors"] = [fallback_error]

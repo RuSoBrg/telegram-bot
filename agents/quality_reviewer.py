@@ -117,7 +117,7 @@ def _failure_command(
         goto="__end__",
         update={
             "messages": [_last_useful_message(state or {})],
-            "quality_report": report,
+            "quality_report": report.model_dump(),
             "quality_feedback": "",
             "quality_iterations": iteration + 1,
             "status": "failed",
@@ -222,18 +222,11 @@ def create_quality_node(
     reviewer, research = quality_models()
 
     def quality_node(state: WorkflowState):
-        def local_fallback_used() -> bool:
-            return (
-                getattr(research, "last_model", None) == "local-fallback"
-                or getattr(getattr(reviewer, "model", None), "last_model", None)
-                == "local-fallback"
-            )
-
-        if local_fallback_used():
+        if state.get("model_used") == "local-fallback":
             return Command(
                 goto="__end__",
                 update={
-                    "status": "approved",
+                    "status": "degraded",
                     "quality_feedback": "",
                     "quality_report": None,
                     "quality_iterations": state.get("quality_iterations", 0),
@@ -276,12 +269,16 @@ def create_quality_node(
             list(state["messages"])
         )
         try:
-            research_response = research.invoke(messages)
-            if getattr(research, "last_model", None) == "local-fallback":
+            if hasattr(research, "invoke_with_meta"):
+                research_response, research_model_used = research.invoke_with_meta(messages)
+            else:
+                research_response = research.invoke(messages)
+                research_model_used = "router"
+            if research_model_used == "local-fallback":
                 return Command(
                     goto="__end__",
                     update={
-                        "status": "approved",
+                        "status": "degraded",
                         "quality_feedback": "",
                         "quality_report": None,
                         "quality_iterations": iteration,
@@ -302,25 +299,38 @@ def create_quality_node(
                         raise ValueError(f"Ferramenta de qualidade não permitida: {call['name']}")
                     result = tool.invoke(call["args"])
                     messages.append(ToolMessage(content=result, tool_call_id=call["id"]))
-            reviewer_decisions = _run_reviewers(
-                reviewer, target, prompt, messages
-            )
-            if local_fallback_used():
-                return Command(
-                    goto="__end__",
-                    update={
-                        "status": "approved",
-                        "quality_feedback": "",
-                        "quality_report": None,
-                        "quality_iterations": iteration,
-                    },
-                )
+            reviewer_decisions = []
+            for role, prompt_file in _reviewer_specs(target):
+                role_messages = [
+                    SystemMessage(
+                        content=prompt
+                        + f"\n\nÉs o revisor {role}. Emite apenas o teu parecer estruturado."
+                        + "\n\n"
+                        + load_prompt(prompt_file)
+                    )
+                ] + messages[1:]
+                if hasattr(reviewer, "invoke_with_meta"):
+                    decision, reviewer_model_used = reviewer.invoke_with_meta(role_messages)
+                else:
+                    decision = reviewer.invoke(role_messages)
+                    reviewer_model_used = "router"
+                if reviewer_model_used == "local-fallback":
+                    return Command(
+                        goto="__end__",
+                        update={
+                            "status": "degraded",
+                            "quality_feedback": "",
+                            "quality_report": None,
+                            "quality_iterations": iteration,
+                        },
+                    )
+                reviewer_decisions.append(decision)
         except Exception as error:
             detail = f"{type(error).__name__}: {error}"
             return _failure_command(detail, iteration, state)
         report, feedback = _review_report(reviewer_decisions, validation)
         result = {
-            "quality_report": report,
+            "quality_report": report.model_dump(),
             "quality_iterations": iteration + 1,
             "iteration": iteration + 1,
             "research_sources": sources,

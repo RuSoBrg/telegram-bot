@@ -1,8 +1,6 @@
 """Ponto de compatibilidade e composição pública do grafo principal."""
 
-from agents.runtime import content_to_text as _content_to_text
-
-__all__ = ["grafo", "_content_to_text"]
+__all__ = ["grafo", "build_workflow"]
 
 
 def __getattr__(name: str):
@@ -12,4 +10,8 @@ def __getattr__(name: str):
         from workflows.main_workflow import build_workflow
 
         return build_workflow()
+    if name == "build_workflow":
+        from workflows.main_workflow import build_workflow
+
+        return build_workflow
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -25,6 +25,9 @@ def create_specialist_node(
     agent_name: str,
     tools_node_name: str,
     quality_node_name: str,
+    *,
+    approval_node: str | None = None,
+    approval_tools: set[str] | None = None,
 ):
     """Create a specialist node with its dynamic role prompt and fallback model."""
     model = specialist_models(agent_name)
@@ -89,8 +92,18 @@ def create_specialist_node(
             )
 
         if response.tool_calls:
+            destination = tools_node_name
+            if (
+                approval_node
+                and os.getenv("REQUIRE_HUMAN_APPROVAL", "true").lower() == "true"
+                and any(
+                call.get("name") in (approval_tools or set())
+                for call in response.tool_calls
+                )
+            ):
+                destination = approval_node
             return Command(
-                goto=tools_node_name,
+                goto=destination,
                 update={
                     "messages": [response],
                     "status": "producing",
@@ -113,3 +126,4 @@ def create_specialist_node(
         )
 
     return specialist_node
+import os

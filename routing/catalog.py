@@ -46,7 +46,27 @@ def _expand(value: Any) -> Any:
 
 def load_catalog(path: Path = CATALOG_PATH) -> dict[str, list[ModelEntry]]:
     data = _expand(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+    models = data.get("models", {})
     tasks = data.get("tasks", {})
+    if models:
+        return {
+            task: [
+                ModelEntry(
+                    provider=str(models[item]["provider"]),
+                    model=str(models[item]["model"]),
+                    api_key_env=str(models[item].get("api_key_env", "")),
+                    capabilities=tuple(models[item].get("capabilities", [])),
+                    timeout_s=float(models[item].get("timeout_s", 60)),
+                    score=int(models[item].get("score", 0)),
+                    api_base_env=models[item].get("api_base_env"),
+                    api_version_env=models[item].get("api_version_env"),
+                    base_url_env=models[item].get("base_url_env"),
+                )
+                for item in entries
+                if item in models and _configured(models[item])
+            ]
+            for task, entries in tasks.items()
+        }
     result: dict[str, list[ModelEntry]] = {}
     for task, entries in tasks.items():
         result[task] = [

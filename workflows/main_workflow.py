@@ -19,6 +19,7 @@ from workflows.training_workflow import build_training_workflow
 
 
 AGENTS = ("marketing", "engenharia", "vida", "formador", "generalista")
+TOOLS_REQUIRING_APPROVAL = {"gerar_documento_excel"}
 MAX_GRAPH_STEPS = 5
 GRAPH_RECURSION_LIMIT = 30
 
@@ -65,8 +66,18 @@ def build_workflow(
             )
             builder.add_node(
                 agent,
-                create_specialist_node(agent, tools_target, f"qualidade_{agent}"),
-                destinations=(tools_target, f"qualidade_{agent}", "quality_reviewer"),
+                create_specialist_node(
+                    agent,
+                    "tools_engenharia" if agent == "engenharia" else tools_target,
+                    f"qualidade_{agent}",
+                    approval_node="approval_engenharia" if agent == "engenharia" else None,
+                    approval_tools=TOOLS_REQUIRING_APPROVAL,
+                ),
+                destinations=(
+                    "approval_engenharia" if agent == "engenharia" else tools_target,
+                    f"qualidade_{agent}",
+                    "quality_reviewer",
+                ),
             )
             tool_node = ToolNode(tools_for(agent))
             if agent == "engenharia":
@@ -75,6 +86,7 @@ def build_workflow(
                     _request_engineering_approval,
                     destinations=("tools_engenharia",),
                 )
+                builder.add_edge("approval_engenharia", "tools_engenharia")
             builder.add_node(
                 f"tools_{agent}",
                 lambda state, node=tool_node, target=agent: _run_tools(
@@ -97,10 +109,7 @@ def build_workflow(
     builder.add_edge("training_workflow", "quality_reviewer")
 
     saver = checkpointer or create_checkpoint_saver()
-    return builder.compile(
-        checkpointer=saver,
-        interrupt_before=_interrupt_before_nodes(),
-    )
+    return builder.compile(checkpointer=saver)
 
 
 async def build_async_workflow(
@@ -127,6 +136,29 @@ def _run_tools(node: ToolNode, state: WorkflowState, target: str) -> Any:
             },
         )
     try:
+        if state.get("approval_decision") == "rejected":
+            from langchain_core.messages import ToolMessage
+
+            pending = [
+                message for message in state.get("messages", [])
+                if getattr(message, "tool_calls", None)
+            ]
+            return Command(
+                goto=target,
+                update={
+                    "messages": [
+                        ToolMessage(
+                            content="Rejeitado pelo utilizador",
+                            tool_call_id=call["id"],
+                        )
+                        for message in pending
+                        for call in message.tool_calls
+                    ],
+                    "approval_decision": "",
+                    "approval_required": False,
+                    "steps": steps + 1,
+                },
+            )
         update_data = node.invoke(state)
     except Exception as error:
         return Command(
@@ -143,9 +175,18 @@ def _run_tools(node: ToolNode, state: WorkflowState, target: str) -> Any:
 
 def _request_engineering_approval(state: WorkflowState) -> dict[str, Any]:
     """Persist the approval status before pausing before engineering tools."""
+    from langgraph.types import interrupt
+
+    decision = interrupt(
+        {
+            "type": "engineering_approval",
+            "message": "É necessária aprovação para executar esta ferramenta.",
+        }
+    )
     return {
-        "status": WorkflowStatus.APPROVAL_REQUIRED,
-        "approval_required": True,
+        "status": WorkflowStatus.PRODUCING.value,
+        "approval_required": False,
+        "approval_decision": decision,
     }
 
 

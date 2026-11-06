@@ -2,9 +2,6 @@ from typing import Annotated, TypedDict
 
 from langgraph.graph.message import add_messages
 
-from domain.models import ReviewResult
-
-
 class WorkflowState(TypedDict, total=False):
     request_id: str
     user_id: str
@@ -17,7 +14,7 @@ class WorkflowState(TypedDict, total=False):
     messages: Annotated[list, add_messages]
     research_sources: list[dict]
     artifacts: list[dict]
-    quality_report: ReviewResult | None
+    quality_report: dict | None
     iteration: int
     approval_required: bool
     status: str

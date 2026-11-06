@@ -3,15 +3,17 @@ import hmac
 import logging
 import os
 import sqlite3
+import weakref
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator, Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 import uvicorn
+import litellm
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
 from telegram import Update
@@ -39,6 +41,9 @@ from psycopg import Error as PsycopgError
 from routing.availability import AvailabilityStore
 from routing.alerts import configure_alert_sender
 from routing.catalog import load_catalog
+from routing.router import ModelRouter
+from routing.errors import ErrorKind, classify_error
+from routing.alerts import notify_disabled
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -52,7 +57,7 @@ workflow_store = WorkflowStore()
 artifact_store = ArtifactVersionStore()
 grafo: Any | None = None
 _availability_cleanup_task: asyncio.Task | None = None
-_chat_locks: dict[str, asyncio.Lock] = {}
+_chat_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
 def _allowed_user_ids() -> set[int]:
@@ -146,12 +151,56 @@ async def _cleanup_availability_periodically() -> None:
             logger.info("Foram removidos %d cooldowns expirados.", cleared)
 
 
+async def _validate_catalog_models() -> None:
+    store = AvailabilityStore()
+    seen: set[tuple[str, str]] = set()
+    for entries in load_catalog().values():
+        for entry in entries:
+            key = (entry.provider, entry.model)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                request = ModelRouter._kwargs(
+                    entry,
+                    [{"role": "user", "content": "ping"}],
+                    None,
+                )
+                await litellm.acompletion(
+                    **request,
+                    max_tokens=1,
+                    timeout=min(5, entry.timeout_s),
+                )
+            except Exception as error:
+                classified = classify_error(error)
+                if classified.kind in {ErrorKind.AUTH, ErrorKind.MODEL_NOT_FOUND}:
+                    until = datetime.now(timezone.utc) + timedelta(days=365)
+                    store.mark_unavailable(
+                        entry.provider,
+                        entry.model,
+                        until,
+                        classified.kind.value,
+                        str(error),
+                    )
+                    await notify_disabled(
+                        classified.disable or "model",
+                        entry.provider,
+                        entry.model,
+                        classified.kind.value,
+                    )
+                logger.warning(
+                    "Validação inicial falhou para %s: %s", entry.model_id, error
+                )
+
+
 def _workflow_status(
     approval_required: bool,
     latest_state: Mapping[str, Any],
 ) -> WorkflowStatus:
     if latest_state.get("status") == "failed":
         return WorkflowStatus.FAILED
+    if latest_state.get("status") == "degraded":
+        return WorkflowStatus.DEGRADED
     if approval_required:
         return WorkflowStatus.APPROVAL_REQUIRED
     return WorkflowStatus.APPROVED
@@ -244,6 +293,8 @@ async def _send_workflow_message(
             errors[0] if errors else None,
             response=response,
         )
+        if latest_state.get("status") == "degraded":
+            text = f"⚠️ Resposta de último recurso\n\n{text}"
         text = _with_model_footer(text, latest_state)
         for index in range(0, len(text), 4000):
             await context.bot.send_message(chat_id=chat_id, text=text[index : index + 4000])
@@ -386,7 +437,8 @@ async def _run_graph_events(
     chat_id: str,
     request_id: str,
 ) -> None:
-    async with _lock_for_chat(chat_id):
+    lock = _lock_for_chat(chat_id)
+    async with lock:
         try:
             eventos = await _stream_graph(graph_input, chat_id)
             with timed_event(
@@ -599,6 +651,10 @@ async def _lifespan(_: FastAPI):
         _cleanup_availability_periodically(),
         name="availability-cleanup",
     )
+    try:
+        await _validate_catalog_models()
+    except Exception:
+        logger.exception("Validação do catálogo falhou; o arranque prossegue.")
     await telegram_application.initialize()
     await telegram_application.start()
     polling_started = False

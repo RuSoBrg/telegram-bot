@@ -10,6 +10,7 @@ from routing.availability import AvailabilityStore
 from routing.catalog import ModelEntry
 from routing.router import ModelRouter
 from routing.errors import ErrorKind, classify_error
+from agents.models import RoutedChatModel
 
 
 def _tool():
@@ -239,3 +240,21 @@ def test_fallback_does_not_quote_synthetic_prompt():
     fallback = ModelRouter._fallback([synthetic], "test")
     assert "Prossegue com o próximo passo" not in fallback
     assert "o teu pedido" in fallback
+
+
+def test_concurrent_requests_return_their_own_model_metadata():
+    class FakeRouter(ModelRouter):
+        async def invoke(self, task, messages, tools=None, schema=None):
+            model = messages[0].content
+            return AIMessage(content=model), model
+
+    model = RoutedChatModel(task="test", router=FakeRouter.__new__(FakeRouter))
+
+    async def run():
+        return await __import__("asyncio").gather(
+            model.ainvoke_with_meta([HumanMessage(content="model-a")]),
+            model.ainvoke_with_meta([HumanMessage(content="model-b")]),
+        )
+
+    results = __import__("asyncio").run(run())
+    assert [item[1] for item in results] == ["model-a", "model-b"]
