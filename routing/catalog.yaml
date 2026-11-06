@@ -1,13 +1,13 @@
 # TODO validar estes nomes contra a lista de modelos de cada fornecedor.
 models:
-  azure_gpt4o: {provider: azure, model: "${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}", api_key_env: AZURE_OPENAI_API_KEY, capabilities: [structured_output, tools, long_context], timeout_s: 45, score: 100, api_base_env: AZURE_OPENAI_ENDPOINT, api_version_env: AZURE_OPENAI_API_VERSION}
-  openai_gpt4o: {provider: openai, model: gpt-4o, api_key_env: OPENAI_API_KEY, capabilities: [structured_output, tools, long_context], timeout_s: 45, score: 98}
-  anthropic_sonnet: {provider: anthropic, model: claude-3-5-sonnet-latest, api_key_env: ANTHROPIC_API_KEY, capabilities: [structured_output, tools, long_context], timeout_s: 45, score: 96}
-  groq_llama: {provider: groq, model: llama-3.1-70b-versatile, api_key_env: GROQ_API_KEY, capabilities: [tools], timeout_s: 30, score: 90}
-  openrouter_sonnet: {provider: openrouter, model: anthropic/claude-3.5-sonnet, api_key_env: OPENROUTER_API_KEY, capabilities: [structured_output, tools, long_context], timeout_s: 45, score: 88}
-  gemini_pro: {provider: gemini, model: gemini-1.5-pro, api_key_env: GEMINI_API_KEY, capabilities: [structured_output, tools, long_context], timeout_s: 60, score: 84}
-  openai_mini: {provider: openai, model: gpt-4o-mini, api_key_env: OPENAI_API_KEY, capabilities: [structured_output, tools], timeout_s: 30, score: 80}
-  ollama_local: {provider: ollama, model: llama3.1:8b, api_key_env: OLLAMA_BASE_URL, capabilities: [tools], timeout_s: 60, score: 10, base_url_env: OLLAMA_BASE_URL}
+  azure_gpt4o: {provider: azure_openai, model_id: "${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}", env_var: AZURE_OPENAI_API_KEY, capabilities: [structured_output, tools, long_context], timeout_s: 45, score: 100, api_base_env: AZURE_OPENAI_ENDPOINT, api_version_env: AZURE_OPENAI_API_VERSION}
+  openai_gpt4o: {provider: openai, model_id: gpt-4o, env_var: OPENAI_API_KEY, capabilities: [structured_output, tools, long_context], timeout_s: 45, score: 98}
+  anthropic_sonnet: {provider: anthropic, model_id: claude-3-5-sonnet-20241022, env_var: ANTHROPIC_API_KEY, capabilities: [structured_output, tools, long_context], timeout_s: 45, score: 96}
+  groq_llama: {provider: groq, model_id: llama-3.1-70b-versatile, env_var: GROQ_API_KEY, capabilities: [tools], timeout_s: 30, score: 90}
+  openrouter_sonnet: {provider: openrouter, model_id: anthropic/claude-3.5-sonnet, env_var: OPENROUTER_API_KEY, capabilities: [structured_output, tools, long_context], timeout_s: 45, score: 88}
+  gemini_pro: {provider: google_genai, model_id: gemini-1.5-pro, env_var: GEMINI_API_KEY, capabilities: [structured_output, tools, long_context], timeout_s: 60, score: 84}
+  openai_mini: {provider: openai, model_id: gpt-4o-mini, env_var: OPENAI_API_KEY, capabilities: [structured_output, tools], timeout_s: 30, score: 80}
+  ollama_local: {provider: ollama, model_id: llama3.1:8b, env_var: OLLAMA_BASE_URL, capabilities: [tools], timeout_s: 60, score: 10, base_url_env: OLLAMA_BASE_URL}
 tasks:
   supervisor: [azure_gpt4o, openai_gpt4o, anthropic_sonnet, groq_llama, openrouter_sonnet, gemini_pro, ollama_local]
   engenharia: [openrouter_sonnet, azure_gpt4o, anthropic_sonnet, groq_llama, gemini_pro, openai_mini, ollama_local]

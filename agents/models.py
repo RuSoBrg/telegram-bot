@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Literal, Sequence
 
+from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -12,6 +14,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from domain.models import RequirementsContext
+from routing.catalog import ModelEntry, load_model_definitions
 from routing.router import ModelRouter
 from tools.code_tools import ler_ficheiro_codigo, listar_ficheiros_projeto
 from tools.data_tools import analisar_ficheiro_dados, executar_query_sql
@@ -46,6 +49,43 @@ class QualityDecision(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     required_changes: list[str] = Field(default_factory=list)
     verified_sources: list[dict] = Field(default_factory=list)
+
+
+def get_model(model_name: str, **kwargs: Any) -> BaseChatModel:
+    """Instancia um modelo exclusivamente a partir do catálogo configurado."""
+    definitions = load_model_definitions()
+    entry = definitions.get(model_name)
+    if entry is None:
+        entry = next(
+            (
+                item
+                for item in definitions.values()
+                if item.model_id == model_name
+                or f"{item.provider}/{item.model_id}" == model_name
+            ),
+            None,
+        )
+    if entry is None:
+        raise ValueError(f"Modelo '{model_name}' não existe em routing/catalog.yaml.")
+    if entry.env_var and not os.getenv(entry.env_var, "").strip():
+        raise RuntimeError(
+            f"A variável {entry.env_var} é necessária para instanciar o modelo "
+            f"'{entry.model_id}' ({entry.provider})."
+        )
+    init_kwargs = dict(kwargs)
+    if entry.env_var and entry.provider != "ollama":
+        init_kwargs.setdefault("api_key", os.environ[entry.env_var])
+    if entry.api_base_env and os.getenv(entry.api_base_env):
+        init_kwargs.setdefault("base_url", os.environ[entry.api_base_env])
+    if entry.api_version_env and os.getenv(entry.api_version_env):
+        init_kwargs.setdefault("api_version", os.environ[entry.api_version_env])
+    if entry.base_url_env and os.getenv(entry.base_url_env):
+        init_kwargs.setdefault("base_url", os.environ[entry.base_url_env])
+    return init_chat_model(
+        model=entry.model_id,
+        model_provider=entry.provider,
+        **init_kwargs,
+    )
 
 
 class StructuredRoutedRunnable(Runnable[Any, Any]):

@@ -104,7 +104,7 @@ class ModelRouter:
             try:
                 result = await self._call(entry, messages, tools, schema)
                 self._mark_success(entry)
-                return result, entry.model_id
+                return result, f"{entry.provider}/{entry.model_id}"
             except Exception as error:
                 last_error = error
                 classified = classify_error(
