@@ -75,6 +75,9 @@ def _is_authorized(update: Update) -> bool:
 
 
 async def _reject_unauthorized(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    user_id = user.id if user else "desconhecido"
+    logger.warning("Tentativa de acesso não autorizada: user_id=%s", user_id)
     if update.effective_chat:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
@@ -194,7 +197,9 @@ def _workflow_status(
         return WorkflowStatus.DEGRADED
     if approval_required:
         return WorkflowStatus.APPROVAL_REQUIRED
-    return WorkflowStatus.APPROVED
+    if latest_state.get("status") == "approved" or latest_state.get("approval_decision") == "approved":
+        return WorkflowStatus.APPROVED
+    return WorkflowStatus.COMPLETED
 
 
 def _collect_graph_events(
@@ -255,9 +260,12 @@ async def _send_workflow_message(
     approval_required: bool,
     errors: list[Any],
     latest_state: Mapping[str, Any],
+    request_id: str = "",
 ) -> None:
     failed = latest_state.get("status") == "failed" or bool(errors)
     if approval_required and not failed:
+        callback_ap = f"ap:{request_id}" if request_id else "workflow:approved"
+        callback_rj = f"rj:{request_id}" if request_id else "workflow:rejected"
         await context.bot.send_message(
             chat_id=chat_id,
             text=(
@@ -267,10 +275,9 @@ async def _send_workflow_message(
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
-                        InlineKeyboardButton("Aprovar", callback_data="workflow:approved"),
-                        InlineKeyboardButton("Rejeitar", callback_data="workflow:rejected"),
+                        InlineKeyboardButton("Aprovar", callback_data=callback_ap),
+                        InlineKeyboardButton("Rejeitar", callback_data=callback_rj),
                     ],
-                    [InlineKeyboardButton("Rever", callback_data="workflow:review")],
                 ]
             ),
         )
@@ -340,12 +347,25 @@ def _best_available_text(
 
 
 async def _send_artifacts(context, chat_id: int, artifacts: list[dict]) -> None:
+    from pathlib import Path
     for artifact in artifacts:
         filename = artifact.get("filename", "")
+        file_bytes = None
         artifact_id = artifact.get("artifact_id")
-        if not artifact_id:
-            raise ValueError(f"Artefacto sem ID persistido: {filename}")
-        file_bytes = await asyncio.to_thread(artifact_store.get_bytes, artifact_id)
+        if artifact_id:
+            try:
+                file_bytes = await asyncio.to_thread(artifact_store.get_bytes, artifact_id)
+            except Exception as e:
+                logger.warning("Falha ao ler bytes do artefacto %s: %s", artifact_id, e)
+        if not file_bytes:
+            uri = artifact.get("uri") or artifact.get("path")
+            if uri and not uri.startswith("db://"):
+                path = Path(uri).resolve()
+                if path.is_file() and path.stat().st_size <= 50 * 1024 * 1024:
+                    file_bytes = await asyncio.to_thread(path.read_bytes)
+        if not file_bytes:
+            logger.warning("Artefacto %s não encontrado para envio.", filename)
+            continue
         await context.bot.send_document(
             chat_id=chat_id,
             document=file_bytes,
@@ -385,6 +405,7 @@ async def _send_graph_events(
         approval_required,
         result.errors,
         latest_state,
+        request_id,
     )
 
     if approval_required:
@@ -408,13 +429,45 @@ async def _iter_graph_events(eventos: AsyncIterator[Any]) -> AsyncIterator[Any]:
             yield app_event
 
 
-async def _stream_graph(input_value: Any, chat_id: str) -> Any:
+_concurrency_semaphore = asyncio.Semaphore(2)
+_active_chat_threads: dict[str, str] = {}
+
+
+async def _keep_typing(bot: Any, chat_id: int, stop_event: asyncio.Event) -> None:
+    while not stop_event.is_set():
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=4.0)
+        except asyncio.TimeoutError:
+            pass
+
+
+def _dispatch_workflow_task(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    graph_input: Any,
+    chat_id: str,
+    request_id: str,
+) -> asyncio.Task:
+    coro = _run_graph_events(update, context, graph_input, chat_id, request_id)
+    if hasattr(context, "application") and hasattr(context.application, "create_task"):
+        task = context.application.create_task(coro)
+    else:
+        task = asyncio.create_task(coro)
+    _track_task(task)
+    return task
+
+
+async def _stream_graph(input_value: Any, thread_id: str) -> Any:
     if grafo is None:
         raise RuntimeError("O grafo ainda não foi inicializado.")
     return grafo.astream(
         input_value,
         config={
-            "configurable": {"thread_id": chat_id},
+            "configurable": {"thread_id": thread_id},
             "recursion_limit": GRAPH_RECURSION_LIMIT,
         },
         stream_mode="values",
@@ -424,43 +477,54 @@ async def _stream_graph(input_value: Any, chat_id: str) -> Any:
 async def _run_graph_events(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-    graph_input,
+    graph_input: Any,
     chat_id: str,
     request_id: str,
 ) -> None:
+    chat_numeric_id = update.effective_chat.id if update.effective_chat else None
+    stop_typing = asyncio.Event()
+    typing_task = None
+    if chat_numeric_id:
+        typing_task = asyncio.create_task(_keep_typing(context.bot, chat_numeric_id, stop_typing))
+
     lock = _lock_for_chat(chat_id)
-    async with lock:
-        try:
-            eventos = await _stream_graph(graph_input, chat_id)
-            with timed_event(
-                "workflow_execution",
-                request_id=request_id,
-                workflow="auto",
-                agent="orchestrator",
-            ):
-                await _send_graph_events(update, context, eventos, request_id)
-            log_event("workflow_finished", request_id=request_id)
-        except Exception as error:
-            logger.exception("Erro ao executar workflow %s", request_id)
-            if update.effective_chat:
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=_best_available_text(
-                        {
-                            "objective": (
-                                graph_input.get("objective") or graph_input.get("request")
-                                if isinstance(graph_input, Mapping)
-                                else None
-                            ),
-                            "messages": (
-                                graph_input.get("messages", [])
-                                if isinstance(graph_input, Mapping)
-                                else []
-                            ),
-                        },
-                        error,
-                    ),
-                )
+    try:
+        async with _concurrency_semaphore:
+            async with lock:
+                timeout = float(get_settings().request_budget_seconds or 90.0)
+                try:
+                    eventos = await _stream_graph(graph_input, chat_id)
+                    with timed_event(
+                        "workflow_execution",
+                        request_id=request_id,
+                        workflow="auto",
+                        agent="orchestrator",
+                    ):
+                        await asyncio.wait_for(
+                            _send_graph_events(update, context, eventos, request_id),
+                            timeout=timeout,
+                        )
+                    log_event("workflow_finished", request_id=request_id)
+                except asyncio.TimeoutError:
+                    logger.exception("Timeout ao executar workflow %s", request_id)
+                    short_id = request_id[:8]
+                    if update.effective_chat:
+                        await context.bot.send_message(
+                            chat_id=update.effective_chat.id,
+                            text=f"⚠️ O pedido excedeu o tempo limite (ref: {short_id}). Por favor, tenta novamente.",
+                        )
+                except Exception as error:
+                    logger.exception("Erro ao executar workflow %s: %s", request_id, error)
+                    short_id = request_id[:8]
+                    if update.effective_chat:
+                        await context.bot.send_message(
+                            chat_id=update.effective_chat.id,
+                            text=f"⚠️ Ocorreu um erro ao processar o teu pedido (ref: {short_id}).",
+                        )
+    finally:
+        stop_typing.set()
+        if typing_task:
+            typing_task.cancel()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -487,18 +551,16 @@ async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if not update.message or not update.effective_chat:
         return
-    thread_id = str(update.effective_chat.id)
+    chat_id = str(update.effective_chat.id)
+    thread_id = _active_chat_threads.get(chat_id) or chat_id
     await update.message.reply_text("✅ A aprovação foi recebida. A processar...")
-    task = asyncio.create_task(
-        _run_graph_events(
-            update,
-            context,
-            Command(resume="approved"),
-            thread_id,
-            context.user_data.get("request_id", ""),
-        )
+    _dispatch_workflow_task(
+        update,
+        context,
+        Command(resume="approved"),
+        thread_id,
+        (context.user_data or {}).get("request_id", ""),
     )
-    _track_task(task)
 
 
 async def reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -507,18 +569,16 @@ async def reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if not update.message or not update.effective_chat:
         return
-    thread_id = str(update.effective_chat.id)
+    chat_id = str(update.effective_chat.id)
+    thread_id = _active_chat_threads.get(chat_id) or chat_id
     await update.message.reply_text("O pacote foi rejeitado. A processar a alteração...")
-    task = asyncio.create_task(
-        _run_graph_events(
-            update,
-            context,
-            Command(resume="rejected"),
-            thread_id,
-            context.user_data.get("request_id", ""),
-        )
+    _dispatch_workflow_task(
+        update,
+        context,
+        Command(resume="rejected"),
+        thread_id,
+        (context.user_data or {}).get("request_id", ""),
     )
-    _track_task(task)
 
 
 async def approval_callback(
@@ -529,41 +589,75 @@ async def approval_callback(
     if query is None or query.message is None:
         return
     if not _is_authorized(update):
-        await query.answer()
-        await query.edit_message_text("Não tens autorização para esta ação.")
-        return
-    await query.answer()
-    action = (query.data or "").split(":", 1)[-1]
-    if action not in {"approved", "rejected", "review"}:
-        await query.edit_message_text("Ação de aprovação inválida.")
+        await query.answer("Não tens autorização para esta ação.", show_alert=True)
         return
 
-    thread_id = str(query.message.chat.id)
-    decision = "approved" if action == "approved" else "rejected"
-    if action == "review":
-        decision = "review"
+    data = query.data or ""
+    if ":" not in data:
+        await query.answer("Ação de aprovação inválida.", show_alert=True)
+        return
+
+    prefix, param = data.split(":", 1)
+    if prefix in {"ap", "rj"}:
+        action = "approved" if prefix == "ap" else "rejected"
+        request_id = param
+    elif prefix == "workflow":
+        action = param
+        request_id = (context.user_data or {}).get("request_id", "")
+    else:
+        await query.answer("Ação não reconhecida.", show_alert=True)
+        return
+
+    if action not in {"approved", "rejected"}:
+        await query.answer("Ação de aprovação inválida.", show_alert=True)
+        return
+
+    run = await asyncio.to_thread(workflow_store.get, request_id) if request_id else None
+    if not run:
+        await query.answer("Pedido não encontrado ou já expirado.", show_alert=True)
+        await query.edit_message_text("Pedido não encontrado ou já expirado.")
+        return
+
+    user = update.effective_user
+    if user and str(user.id) != str(run.user_id):
+        await query.answer("Apenas o autor do pedido pode aprovar ou rejeitar.", show_alert=True)
+        return
+
+    if run.status != WorkflowStatus.APPROVAL_REQUIRED:
+        await query.answer("Esta ação já foi processada anteriormente.", show_alert=True)
+        await query.edit_message_text("ℹ️ Esta decisão já tinha sido registada.")
+        return
+
+    decision = action
+    run.status = WorkflowStatus.APPROVED if decision == "approved" else WorkflowStatus.REJECTED
+    await asyncio.to_thread(workflow_store.save, run)
+    await query.answer()
+
+    thread_id = (run.metadata or {}).get("thread_id") or f"{query.message.chat.id}:{request_id}"
     config = {"configurable": {"thread_id": thread_id}}
     if grafo is None:
         await query.edit_message_text("O workflow ainda não está disponível.")
         return
+
     await grafo.aupdate_state(
         config,
         {"approval_decision": decision, "approval_required": False},
     )
     await query.edit_message_text(
         "✅ Aprovado. A processar..." if decision == "approved"
-        else "📝 Pedido de revisão recebido. A processar..."
+        else "❌ Rejeitado. A processar..."
     )
-    task = asyncio.create_task(
-        _run_graph_events(
-            update,
-            context,
-            Command(resume=decision),
-            thread_id,
-            context.user_data.get("request_id", ""),
-        )
+
+    if decision == "rejected":
+        _active_chat_threads[str(query.message.chat.id)] = thread_id
+
+    _dispatch_workflow_task(
+        update,
+        context,
+        Command(resume=decision),
+        thread_id,
+        request_id,
     )
-    _track_task(task)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -574,64 +668,75 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     texto = update.message.text
-    await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id,
-        action=ChatAction.TYPING,
-    )
+    chat_id_str = str(update.effective_chat.id)
     request_id = str(uuid4())
-    chat_id = str(update.effective_chat.id)
-    context.user_data["request_id"] = request_id
-    await asyncio.to_thread(
-        workflow_store.save,
-        WorkflowRun(
-            request_id=request_id,
-            workflow="auto",
-            user_id=str(update.effective_user.id if update.effective_user else chat_id),
-            objective=texto,
-            status=WorkflowStatus.PRODUCING,
-        ),
+    active_thread = _active_chat_threads.pop(chat_id_str, None)
+    thread_id = active_thread or f"{chat_id_str}:{request_id}"
+
+    user_id_str = str(update.effective_user.id if update.effective_user else chat_id_str)
+    run = WorkflowRun(
+        request_id=request_id,
+        workflow="auto",
+        user_id=user_id_str,
+        objective=texto,
+        status=WorkflowStatus.PRODUCING,
+        metadata={"thread_id": thread_id},
     )
-    log_event("workflow_started", request_id=request_id, workflow="auto", user_id=chat_id)
+    await asyncio.to_thread(workflow_store.save, run)
+    log_event("workflow_started", request_id=request_id, workflow="auto", user_id=chat_id_str)
     await update.message.reply_text("⏳ A processar o teu pedido...")
-    task = asyncio.create_task(
-        _run_graph_events(
-            update,
-            context,
-            {
-                "messages": [HumanMessage(content=texto)],
-                "request_id": request_id,
-                "user_id": chat_id,
-            },
-            chat_id,
-            request_id,
-        )
+
+    _dispatch_workflow_task(
+        update,
+        context,
+        {
+            "messages": [HumanMessage(content=texto)],
+            "request_id": request_id,
+            "user_id": chat_id_str,
+        },
+        thread_id,
+        request_id,
     )
-    _track_task(task)
 
 
 def _build_application() -> Application:
     if not TELEGRAM_TOKEN:
         raise ValueError("TELEGRAM_TOKEN não configurado. Adiciona-o ao ficheiro .env.")
+    allowed_ids = get_settings().require_allowed_users()
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("estado", estado))
-    application.add_handler(CommandHandler("aprovar", approve))
-    application.add_handler(CommandHandler("rejeitar", reject))
-    application.add_handler(CallbackQueryHandler(approval_callback, pattern=r"^workflow:"))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    user_filter = filters.User(user_id=allowed_ids)
+    application.add_handler(CommandHandler("start", start, filters=user_filter))
+    application.add_handler(CommandHandler("estado", estado, filters=user_filter))
+    application.add_handler(CommandHandler("modelos", estado, filters=user_filter))
+    application.add_handler(CommandHandler("aprovar", approve, filters=user_filter))
+    application.add_handler(CommandHandler("rejeitar", reject, filters=user_filter))
+    application.add_handler(CallbackQueryHandler(approval_callback, pattern=r"^(ap|rj|workflow):"))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & user_filter, handle_message))
+    application.add_handler(MessageHandler(~user_filter, _reject_unauthorized))
     return application
 
 
-telegram_application = _build_application() if TELEGRAM_TOKEN else None
+def _get_telegram_application() -> Application | None:
+    if not TELEGRAM_TOKEN:
+        return None
+    if not get_settings().telegram_user_ids:
+        return None
+    return _build_application()
+
+
+telegram_application = _get_telegram_application()
 WEBHOOK_PATH = "/telegram/webhook"
 WEBHOOK_SECRET = get_settings().telegram_webhook_secret
 
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
-    global grafo, _availability_cleanup_task
-    if telegram_application is None:
+    global grafo, _availability_cleanup_task, telegram_application
+    if not TELEGRAM_TOKEN:
         raise RuntimeError("TELEGRAM_TOKEN não configurado.")
+    get_settings().require_allowed_users()
+    if telegram_application is None:
+        telegram_application = _build_application()
     settings = get_settings()
     base_url = settings.telegram_webhook_base_url.strip().rstrip("/")
     if base_url and not settings.telegram_webhook_secret.strip():

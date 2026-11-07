@@ -6,10 +6,14 @@ import hashlib
 import asyncio
 import sqlite3
 import time
+import logging
 from contextlib import AbstractAsyncContextManager, AbstractContextManager, closing
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
+FALLBACK_SQLITE_PATH = "data/local_fallback.db"
 
 import psycopg
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -99,11 +103,17 @@ class WorkflowStore:
         if self._sqlite:
             _init_sqlite(self._database)
         else:
-            _ensure_table("workflow_runs", """
-                request_id TEXT PRIMARY KEY, workflow TEXT NOT NULL, user_id TEXT NOT NULL,
-                status TEXT NOT NULL, payload JSONB NOT NULL,
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-            """)
+            try:
+                _ensure_table("workflow_runs", """
+                    request_id TEXT PRIMARY KEY, workflow TEXT NOT NULL, user_id TEXT NOT NULL,
+                    status TEXT NOT NULL, payload JSONB NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                """)
+            except Exception as error:
+                logger.warning("Postgres indisponível para WorkflowStore (%s); a usar fallback SQLite.", error)
+                self._database = FALLBACK_SQLITE_PATH
+                self._sqlite = True
+                _init_sqlite(self._database)
 
     def save(self, run: WorkflowRun) -> None:
         if self._sqlite:
@@ -204,11 +214,17 @@ class ArtifactStore:
         if self._sqlite:
             _init_sqlite(self._database)
         else:
-            _ensure_table("artifacts", """
-                artifact_id TEXT PRIMARY KEY, filename TEXT NOT NULL, mime_type TEXT NOT NULL,
-                content BYTEA NOT NULL, sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-            """)
+            try:
+                _ensure_table("artifacts", """
+                    artifact_id TEXT PRIMARY KEY, filename TEXT NOT NULL, mime_type TEXT NOT NULL,
+                    content BYTEA NOT NULL, sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                """)
+            except Exception as error:
+                logger.warning("Postgres indisponível para ArtifactStore (%s); a usar fallback SQLite.", error)
+                self._database = FALLBACK_SQLITE_PATH
+                self._sqlite = True
+                _init_sqlite(self._database)
 
 
 class QuotaExceededError(RuntimeError):
@@ -223,7 +239,13 @@ class UserQuotaStore:
         if self._sqlite:
             _init_sqlite(self._database)
         else:
-            _ensure_table("user_quota_events", "user_id TEXT NOT NULL, operation TEXT NOT NULL, created_at DOUBLE PRECISION NOT NULL")
+            try:
+                _ensure_table("user_quota_events", "user_id TEXT NOT NULL, operation TEXT NOT NULL, created_at DOUBLE PRECISION NOT NULL")
+            except Exception as error:
+                logger.warning("Postgres indisponível para UserQuotaStore (%s); a usar fallback SQLite.", error)
+                self._database = FALLBACK_SQLITE_PATH
+                self._sqlite = True
+                _init_sqlite(self._database)
 
     def consume(self, user_id: str, operation: str) -> None:
         if not user_id:

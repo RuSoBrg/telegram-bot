@@ -12,6 +12,7 @@ class WorkflowStatus(StrEnum):
     REVIEWING = "reviewing"
     APPROVAL_REQUIRED = "approval_required"
     APPROVED = "approved"
+    COMPLETED = "completed"
     DEGRADED = "degraded"
     REJECTED = "rejected"
     FAILED = "failed"

@@ -210,4 +210,16 @@ def _enforce_quota(state: WorkflowState) -> Any:
                 "messages": [{"role": "assistant", "content": str(error)}],
             },
         )
-    return {"status": "producing"}
+    return {
+        "status": "producing",
+        "iteration": 0,
+        "quality_iterations": 0,
+        "steps": 0,
+        "errors": [],
+        "research_sources": [],
+        "artifacts": [],
+        "quality_report": None,
+        "quality_feedback": "",
+        "approval_required": False,
+        "approval_decision": "",
+    }

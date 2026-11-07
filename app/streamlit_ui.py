@@ -76,10 +76,11 @@ if prompt := st.chat_input("O que precisas de resolver hoje? (Ex: Ideias para Ti
                 run.metadata["plan"] = ultimo_estado["plan"]
             workflow_store.save(run)
         except Exception as error:
-            erro_msg = (
-                "❌ O workflow terminou com erro.\n"
-                f"Erro: {type(error).__name__}: {error}"
-            )
+            import logging
+            logger = logging.getLogger("streamlit_app")
+            short_id = st.session_state.request_id[:8]
+            logger.exception("Falha no workflow %s: %s", st.session_state.request_id, error)
+            erro_msg = f"⚠️ Ocorreu um erro ao processar o teu pedido (ref: {short_id}). Por favor, tenta novamente."
             st.error(erro_msg)
             st.session_state.messages.append({"role": "assistant", "content": erro_msg})
 
@@ -87,22 +88,29 @@ if st.session_state.approval_required:
     st.info("O output passou na revisão automática e aguarda a tua aprovação.")
     col_approve, col_reject = st.columns(2)
     if col_approve.button("Aprovar e concluir"):
-        asyncio.run(
+        result = asyncio.run(
             run_job(
                 Command(resume="approved"),
                 st.session_state.thread_id,
                 user_id=st.session_state.thread_id,
             )
         )
-        st.session_state.approval_required = False
+        st.session_state.approval_required = result.needs_approval
+        if result.text:
+            st.session_state.messages.append({"role": "assistant", "content": result.text})
+        if result.artifacts:
+            art_text = "Ficheiros gerados:\n" + "\n".join(f"- 📎 {a.get('filename')}" for a in result.artifacts)
+            st.session_state.messages.append({"role": "assistant", "content": art_text})
         st.rerun()
     if col_reject.button("Rejeitar"):
-        asyncio.run(
+        result = asyncio.run(
             run_job(
                 Command(resume="rejected"),
                 st.session_state.thread_id,
                 user_id=st.session_state.thread_id,
             )
         )
-        st.session_state.approval_required = False
+        st.session_state.approval_required = result.needs_approval
+        if result.text:
+            st.session_state.messages.append({"role": "assistant", "content": result.text})
         st.warning("Output rejeitado. Indica as alterações pretendidas.")

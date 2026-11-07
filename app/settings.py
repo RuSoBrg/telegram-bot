@@ -72,11 +72,19 @@ class Settings(BaseSettings):
         try:
             return [int(str(item).strip()) for item in value if str(item).strip()]
         except ValueError as error:
-            raise ValueError("ALLOWED_TELEGRAM_USER_IDS contém um ID inválido.") from error
+            raise ValueError("ALLOWED_USER_IDS contém um ID inválido.") from error
 
     @property
     def telegram_user_ids(self) -> list[int]:
-        return self.allowed_telegram_user_ids or self.allowed_user_ids
+        return self.allowed_user_ids or self.allowed_telegram_user_ids
+
+    def require_allowed_users(self) -> list[int]:
+        ids = self.telegram_user_ids
+        if not ids:
+            raise RuntimeError(
+                "ALLOWED_USER_IDS não está configurado. O bot recusa arrancar sem lista de utilizadores autorizados."
+            )
+        return ids
 
 
 
